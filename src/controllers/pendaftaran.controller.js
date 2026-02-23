@@ -50,13 +50,44 @@ const getById = async (req, res) => {
 
 const create = async (req, res) => {
   try {
-    const { kejurdaId, pengcabId, namaAtlet, kategori, kelasTanding } = req.body;
-    const dokumen = req.file ? `/uploads/${req.file.filename}` : null;
+    const { kejurdaId, pengcabId, namaAtlet, kategori, kelasTanding, dataPersyaratan, catatanPeserta } = req.body;
+    
+    // Handle main document
+    const dokumen = req.files?.dokumen?.[0] ? `/uploads/${req.files.dokumen[0].filename}` : null;
+    
+    // Handle dynamic form files
+    const uploadedFiles = {};
+    if (req.files?.files) {
+      req.files.files.forEach((file, index) => {
+        uploadedFiles[`file_${index}`] = `/uploads/${file.filename}`;
+      });
+    }
 
     // Cek apakah kejurda masih buka
-    const kejurda = await prisma.kejurda.findUnique({ where: { id: parseInt(kejurdaId) } });
+    const kejurda = await prisma.kejurda.findUnique({ 
+      where: { id: parseInt(kejurdaId) },
+      include: { persyaratanFields: { where: { aktif: true } } }
+    });
     if (!kejurda || !kejurda.statusBuka) {
-      return res.status(400).json({ error: 'Kejurda tidak ditemukan atau pendaftaran sudah ditutup' });
+      return res.status(400).json({ error: 'Event tidak ditemukan atau pendaftaran sudah ditutup' });
+    }
+
+    // Check batas pendaftaran
+    if (kejurda.batasPendaftaran && new Date() > new Date(kejurda.batasPendaftaran)) {
+      return res.status(400).json({ error: 'Batas waktu pendaftaran sudah lewat' });
+    }
+
+    // Parse dataPersyaratan if it's a string
+    let parsedPersyaratan = dataPersyaratan;
+    if (typeof dataPersyaratan === 'string') {
+      try {
+        parsedPersyaratan = JSON.parse(dataPersyaratan);
+      } catch { parsedPersyaratan = {}; }
+    }
+    
+    // Merge uploaded files into dataPersyaratan
+    if (Object.keys(uploadedFiles).length > 0) {
+      parsedPersyaratan = { ...parsedPersyaratan, _uploadedFiles: uploadedFiles };
     }
 
     const pendaftaran = await prisma.pendaftaranKejurda.create({
@@ -64,7 +95,12 @@ const create = async (req, res) => {
         kejurdaId: parseInt(kejurdaId),
         userId: req.user.id,
         pengcabId: pengcabId ? parseInt(pengcabId) : null,
-        namaAtlet, kategori, kelasTanding, dokumen
+        namaAtlet, 
+        kategori, 
+        kelasTanding, 
+        dokumen,
+        dataPersyaratan: parsedPersyaratan,
+        catatanPeserta
       },
       include: {
         kejurda: { select: { id: true, namaKejurda: true, jenisEvent: true } },
@@ -73,7 +109,7 @@ const create = async (req, res) => {
     });
     res.status(201).json({ message: 'Pendaftaran berhasil', pendaftaran });
   } catch (error) {
-    res.status(500).json({ error: 'Gagal mendaftar kejurda', detail: error.message });
+    res.status(500).json({ error: 'Gagal mendaftar event', detail: error.message });
   }
 };
 

@@ -5,7 +5,11 @@ const upload = require('../middleware/upload.middleware');
 
 router.get('/', authenticate, getAll);
 router.get('/:id', authenticate, getById);
-router.post('/', authenticate, upload.single('dokumen'), create);
+// Support multiple file uploads: dokumen + up to 20 dynamic files
+router.post('/', authenticate, upload.fields([
+  { name: 'dokumen', maxCount: 1 },
+  { name: 'files', maxCount: 20 }
+]), create);
 router.patch('/:id/status', authenticate, isAdmin, updateStatus);
 router.delete('/:id', authenticate, remove);
 

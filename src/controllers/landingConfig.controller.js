@@ -222,6 +222,75 @@ const updateSiteConfig = async (req, res) => {
   }
 };
 
+// ══════════════════════════════════════════
+// STRUKTUR ORGANISASI
+// ══════════════════════════════════════════
+const getStruktur = async (req, res) => {
+  try {
+    const struktur = await prisma.strukturOrganisasi.findMany({ orderBy: { urutan: 'asc' } });
+    res.json(struktur);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+const createStruktur = async (req, res) => {
+  try {
+    const { jabatan, nama, urutan, aktif } = req.body;
+    if (!jabatan || !nama) return res.status(400).json({ error: 'Jabatan dan nama wajib diisi' });
+    const data = {
+      jabatan,
+      nama,
+      urutan: parseInt(urutan) || 0,
+      aktif: aktif !== 'false',
+    };
+    if (req.file) data.foto = `/uploads/${req.file.filename}`;
+    const struktur = await prisma.strukturOrganisasi.create({ data });
+    res.status(201).json(struktur);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+const updateStruktur = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const data = {};
+    if (req.body.jabatan !== undefined) data.jabatan = req.body.jabatan;
+    if (req.body.nama !== undefined) data.nama = req.body.nama;
+    if (req.body.urutan !== undefined) data.urutan = parseInt(req.body.urutan) || 0;
+    if (req.body.aktif !== undefined) data.aktif = req.body.aktif === 'true';
+    if (req.file) {
+      // Delete old foto
+      const old = await prisma.strukturOrganisasi.findUnique({ where: { id: parseInt(id) } });
+      if (old?.foto) {
+        const oldPath = path.join(__dirname, '..', '..', old.foto);
+        if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+      }
+      data.foto = `/uploads/${req.file.filename}`;
+    }
+    const struktur = await prisma.strukturOrganisasi.update({ where: { id: parseInt(id) }, data });
+    res.json(struktur);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+const deleteStruktur = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const s = await prisma.strukturOrganisasi.findUnique({ where: { id: parseInt(id) } });
+    if (s?.foto) {
+      const filePath = path.join(__dirname, '..', '..', s.foto);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    }
+    await prisma.strukturOrganisasi.delete({ where: { id: parseInt(id) } });
+    res.json({ message: 'Struktur organisasi dihapus' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 module.exports = {
   // Hero
   getHeroSlides, createHeroSlide, updateHeroSlide, deleteHeroSlide,
@@ -231,4 +300,6 @@ module.exports = {
   getFeedback, submitFeedback, markFeedbackRead, deleteFeedback,
   // Config
   getSiteConfig, updateSiteConfig,
+  // Struktur Organisasi
+  getStruktur, createStruktur, updateStruktur, deleteStruktur,
 };

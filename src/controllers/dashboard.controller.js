@@ -92,7 +92,7 @@ const getLandingData = async (req, res) => {
         where: { statusBuka: true, statusApproval: 'DISETUJUI' },
         orderBy: { tanggalMulai: 'asc' },
         select: {
-          id: true, namaKejurda: true, jenisEvent: true,
+          id: true, namaKejurda: true, jenisEvent: true, targetPeserta: true,
           tanggalMulai: true, tanggalSelesai: true,
           lokasi: true, deskripsi: true, poster: true,
           pengcabPengaju: { select: { nama: true, kota: true } }
@@ -105,7 +105,7 @@ const getLandingData = async (req, res) => {
       where: { pengcabId: null, statusBuka: true },
       orderBy: { tanggalMulai: 'asc' },
       select: {
-        id: true, namaKejurda: true, jenisEvent: true,
+        id: true, namaKejurda: true, jenisEvent: true, targetPeserta: true,
         tanggalMulai: true, tanggalSelesai: true,
         lokasi: true, deskripsi: true, poster: true,
       }
@@ -125,11 +125,12 @@ const getLandingData = async (req, res) => {
     }
     mergedEvents.sort((a, b) => new Date(a.tanggalMulai) - new Date(b.tanggalMulai));
 
-    // Fetch hero slides, active berita, and site config
-    const [heroSlides, beritaList, siteConfigs] = await Promise.all([
+    // Fetch hero slides, active berita, site config, and struktur
+    const [heroSlides, beritaList, siteConfigs, strukturList] = await Promise.all([
       prisma.heroSlide.findMany({ where: { aktif: true }, orderBy: { urutan: 'asc' } }),
       prisma.berita.findMany({ where: { aktif: true }, orderBy: { createdAt: 'desc' }, take: 6 }),
       prisma.siteConfig.findMany(),
+      prisma.strukturOrganisasi.findMany({ where: { aktif: true }, orderBy: { urutan: 'asc' } }),
     ]);
     const config = {};
     siteConfigs.forEach(c => { config[c.key] = c.value; });
@@ -147,6 +148,7 @@ const getLandingData = async (req, res) => {
       heroSlides,
       beritaList,
       config,
+      strukturList,
     });
   } catch (error) {
     console.error('Landing data error:', error);

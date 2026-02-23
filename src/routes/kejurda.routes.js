@@ -1,10 +1,26 @@
 const router = require('express').Router();
-const { getAllKejurda, getKejurdaById, createKejurda, updateKejurda, removeKejurda, getOpenKejurda, approveKejurda, rejectKejurda } = require('../controllers/kejurda.controller');
+const { 
+  getAllKejurda, 
+  getKejurdaById, 
+  createKejurda, 
+  updateKejurda, 
+  removeKejurda, 
+  getOpenKejurda, 
+  getEventForRegistration,
+  approveKejurda, 
+  rejectKejurda,
+  getPersyaratanFields,
+  createPersyaratanField,
+  updatePersyaratanField,
+  deletePersyaratanField,
+  reorderPersyaratanFields
+} = require('../controllers/kejurda.controller');
 const { authenticate, isAdmin } = require('../middleware/auth.middleware');
 const upload = require('../middleware/upload.middleware');
 
 // Public
 router.get('/open', getOpenKejurda);
+router.get('/register/:id', getEventForRegistration);
 
 // Admin
 router.get('/', authenticate, isAdmin, getAllKejurda);
@@ -14,5 +30,12 @@ router.put('/:id', authenticate, isAdmin, upload.single('poster'), updateKejurda
 router.delete('/:id', authenticate, isAdmin, removeKejurda);
 router.patch('/:id/approve', authenticate, isAdmin, approveKejurda);
 router.patch('/:id/reject', authenticate, isAdmin, rejectKejurda);
+
+// Persyaratan Fields (Admin)
+router.get('/:kejurdaId/persyaratan', authenticate, isAdmin, getPersyaratanFields);
+router.post('/:kejurdaId/persyaratan', authenticate, isAdmin, createPersyaratanField);
+router.put('/persyaratan/:id', authenticate, isAdmin, updatePersyaratanField);
+router.delete('/persyaratan/:id', authenticate, isAdmin, deletePersyaratanField);
+router.patch('/:kejurdaId/persyaratan/reorder', authenticate, isAdmin, reorderPersyaratanFields);
 
 module.exports = router;

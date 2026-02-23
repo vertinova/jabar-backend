@@ -6,7 +6,7 @@ const getAllKejurda = async (req, res) => {
     const kejurda = await prisma.kejurda.findMany({
       orderBy: { tanggalMulai: 'desc' },
       include: {
-        _count: { select: { pendaftaran: true } },
+        _count: { select: { pendaftaran: true, persyaratanFields: true } },
         pengcabPengaju: { select: { id: true, nama: true, kota: true } }
       }
     });
@@ -21,9 +21,13 @@ const getKejurdaById = async (req, res) => {
     const kejurda = await prisma.kejurda.findUnique({
       where: { id: parseInt(req.params.id) },
       include: {
+        persyaratanFields: {
+          where: { aktif: true },
+          orderBy: { urutan: 'asc' }
+        },
         pendaftaran: {
           include: {
-            user: { select: { id: true, name: true, email: true } },
+            user: { select: { id: true, name: true, email: true, phone: true } },
             pengcab: { select: { id: true, nama: true, kota: true } }
           },
           orderBy: { createdAt: 'desc' }
@@ -39,7 +43,7 @@ const getKejurdaById = async (req, res) => {
 
 const createKejurda = async (req, res) => {
   try {
-    const { namaKejurda, tanggalMulai, tanggalSelesai, lokasi, deskripsi, jenisEvent } = req.body;
+    const { namaKejurda, tanggalMulai, tanggalSelesai, lokasi, deskripsi, jenisEvent, targetPeserta, biayaPendaftaran, batasPendaftaran, kontakPerson, kontakPhone } = req.body;
     const jenis = jenisEvent || 'KEJURDA';
     const poster = req.file ? `/uploads/${req.file.filename}` : null;
 
@@ -65,9 +69,16 @@ const createKejurda = async (req, res) => {
       data: {
         namaKejurda,
         jenisEvent: jenis,
+        targetPeserta: targetPeserta || 'CLUB',
         tanggalMulai: new Date(tanggalMulai),
         tanggalSelesai: new Date(tanggalSelesai),
-        lokasi, deskripsi, poster
+        lokasi, 
+        deskripsi, 
+        poster,
+        biayaPendaftaran: biayaPendaftaran ? parseFloat(biayaPendaftaran) : null,
+        batasPendaftaran: batasPendaftaran ? new Date(batasPendaftaran) : null,
+        kontakPerson,
+        kontakPhone
       }
     });
     res.status(201).json({ message: 'Event berhasil dibuat', kejurda });
@@ -78,12 +89,15 @@ const createKejurda = async (req, res) => {
 
 const updateKejurda = async (req, res) => {
   try {
-    const { namaKejurda, tanggalMulai, tanggalSelesai, lokasi, deskripsi, statusBuka, jenisEvent } = req.body;
-    const data = { namaKejurda, lokasi, deskripsi };
+    const { namaKejurda, tanggalMulai, tanggalSelesai, lokasi, deskripsi, statusBuka, jenisEvent, targetPeserta, biayaPendaftaran, batasPendaftaran, kontakPerson, kontakPhone } = req.body;
+    const data = { namaKejurda, lokasi, deskripsi, kontakPerson, kontakPhone };
     if (jenisEvent) data.jenisEvent = jenisEvent;
+    if (targetPeserta) data.targetPeserta = targetPeserta;
     if (tanggalMulai) data.tanggalMulai = new Date(tanggalMulai);
     if (tanggalSelesai) data.tanggalSelesai = new Date(tanggalSelesai);
     if (statusBuka !== undefined) data.statusBuka = statusBuka === 'true' || statusBuka === true;
+    if (biayaPendaftaran !== undefined) data.biayaPendaftaran = biayaPendaftaran ? parseFloat(biayaPendaftaran) : null;
+    if (batasPendaftaran !== undefined) data.batasPendaftaran = batasPendaftaran ? new Date(batasPendaftaran) : null;
     if (req.file) data.poster = `/uploads/${req.file.filename}`;
 
     // KEJURDA & KEJURCAB: max 1 per year (exclude self)
@@ -133,7 +147,13 @@ const getOpenKejurda = async (req, res) => {
     if (req.query.jenis) where.jenisEvent = req.query.jenis;
     const kejurda = await prisma.kejurda.findMany({
       where,
-      orderBy: { tanggalMulai: 'asc' }
+      orderBy: { tanggalMulai: 'asc' },
+      include: {
+        persyaratanFields: {
+          where: { aktif: true },
+          orderBy: { urutan: 'asc' }
+        }
+      }
     });
     res.json(kejurda);
   } catch (error) {
@@ -141,7 +161,146 @@ const getOpenKejurda = async (req, res) => {
   }
 };
 
-module.exports = { getAllKejurda, getKejurdaById, createKejurda, updateKejurda, removeKejurda, getOpenKejurda, approveKejurda, rejectKejurda };
+// Get single event for public registration
+const getEventForRegistration = async (req, res) => {
+  try {
+    const kejurda = await prisma.kejurda.findUnique({
+      where: { id: parseInt(req.params.id) },
+      include: {
+        persyaratanFields: {
+          where: { aktif: true },
+          orderBy: { urutan: 'asc' }
+        }
+      }
+    });
+    if (!kejurda) return res.status(404).json({ error: 'Event tidak ditemukan' });
+    if (!kejurda.statusBuka || kejurda.statusApproval !== 'DISETUJUI') {
+      return res.status(400).json({ error: 'Pendaftaran event ini tidak dibuka' });
+    }
+    res.json(kejurda);
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal mengambil data event', detail: error.message });
+  }
+};
+
+// ========= PERSYARATAN FIELDS CRUD =========
+const getPersyaratanFields = async (req, res) => {
+  try {
+    const fields = await prisma.persyaratanField.findMany({
+      where: { kejurdaId: parseInt(req.params.kejurdaId) },
+      orderBy: { urutan: 'asc' }
+    });
+    res.json(fields);
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal mengambil data persyaratan', detail: error.message });
+  }
+};
+
+const createPersyaratanField = async (req, res) => {
+  try {
+    const kejurdaId = parseInt(req.params.kejurdaId);
+    const { label, tipe, required, options, keterangan, urutan } = req.body;
+    
+    // Get max urutan if not provided
+    let fieldUrutan = urutan;
+    if (fieldUrutan === undefined) {
+      const maxUrutan = await prisma.persyaratanField.findFirst({
+        where: { kejurdaId },
+        orderBy: { urutan: 'desc' },
+        select: { urutan: true }
+      });
+      fieldUrutan = (maxUrutan?.urutan || 0) + 1;
+    }
+
+    const field = await prisma.persyaratanField.create({
+      data: {
+        kejurdaId,
+        label,
+        tipe: tipe || 'TEXT',
+        required: required !== false,
+        options: options || null,
+        keterangan,
+        urutan: fieldUrutan
+      }
+    });
+    res.status(201).json({ message: 'Field persyaratan berhasil ditambahkan', field });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal menambahkan field', detail: error.message });
+  }
+};
+
+const updatePersyaratanField = async (req, res) => {
+  try {
+    const { label, tipe, required, options, keterangan, urutan, aktif } = req.body;
+    const data = {};
+    if (label !== undefined) data.label = label;
+    if (tipe !== undefined) data.tipe = tipe;
+    if (required !== undefined) data.required = required;
+    if (options !== undefined) data.options = options;
+    if (keterangan !== undefined) data.keterangan = keterangan;
+    if (urutan !== undefined) data.urutan = urutan;
+    if (aktif !== undefined) data.aktif = aktif;
+
+    const field = await prisma.persyaratanField.update({
+      where: { id: parseInt(req.params.id) },
+      data
+    });
+    res.json({ message: 'Field persyaratan berhasil diupdate', field });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal update field', detail: error.message });
+  }
+};
+
+const deletePersyaratanField = async (req, res) => {
+  try {
+    await prisma.persyaratanField.delete({
+      where: { id: parseInt(req.params.id) }
+    });
+    res.json({ message: 'Field persyaratan berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal menghapus field', detail: error.message });
+  }
+};
+
+// Reorder persyaratan fields
+const reorderPersyaratanFields = async (req, res) => {
+  try {
+    const { fieldOrders } = req.body; // Array of { id, urutan }
+    if (!Array.isArray(fieldOrders)) {
+      return res.status(400).json({ error: 'fieldOrders harus berupa array' });
+    }
+
+    await Promise.all(
+      fieldOrders.map(item => 
+        prisma.persyaratanField.update({
+          where: { id: item.id },
+          data: { urutan: item.urutan }
+        })
+      )
+    );
+    res.json({ message: 'Urutan field berhasil diupdate' });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal mengubah urutan', detail: error.message });
+  }
+};
+
+module.exports = { 
+  getAllKejurda, 
+  getKejurdaById, 
+  createKejurda, 
+  updateKejurda, 
+  removeKejurda, 
+  getOpenKejurda, 
+  getEventForRegistration,
+  approveKejurda, 
+  rejectKejurda,
+  // Persyaratan fields
+  getPersyaratanFields,
+  createPersyaratanField,
+  updatePersyaratanField,
+  deletePersyaratanField,
+  reorderPersyaratanFields
+};
 
 // ========= Admin Approval for Pengcab-submitted Kejurcab =========
 async function approveKejurda(req, res) {

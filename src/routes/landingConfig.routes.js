@@ -5,6 +5,7 @@ const ctrl = require('../controllers/landingConfig.controller');
 
 // ── Public routes ──
 router.post('/feedback', ctrl.submitFeedback);
+router.get('/struktur', ctrl.getStruktur); // Public untuk landing page
 
 // ── Admin routes ──
 router.use(authenticate, isAdmin);
@@ -30,5 +31,10 @@ router.delete('/feedback/:id', ctrl.deleteFeedback);
 // Site Config
 router.get('/config', ctrl.getSiteConfig);
 router.put('/config', ctrl.updateSiteConfig);
+
+// Struktur Organisasi (Admin only for CUD)
+router.post('/struktur', upload.single('foto'), ctrl.createStruktur);
+router.put('/struktur/:id', upload.single('foto'), ctrl.updateStruktur);
+router.delete('/struktur/:id', ctrl.deleteStruktur);
 
 module.exports = router;

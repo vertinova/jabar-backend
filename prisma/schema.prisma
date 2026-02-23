@@ -123,6 +123,7 @@ model Kejurda {
   id             Int      @id @default(autoincrement())
   namaKejurda    String
   jenisEvent     String   @default("KEJURDA") // KEJURDA, KEJURCAB, EVENT_REGULER
+  targetPeserta  TargetPeserta @default(CLUB) // CLUB = via akun club, UMUM = via landing page
   tanggalMulai   DateTime
   tanggalSelesai DateTime
   lokasi         String
@@ -132,28 +133,72 @@ model Kejurda {
   pengcabId      Int?
   statusApproval String   @default("DISETUJUI") // PENDING, DISETUJUI, DITOLAK
   catatanAdmin   String?  @db.Text
+  biayaPendaftaran Decimal? @db.Decimal(12, 2)
+  batasPendaftaran DateTime?
+  kontakPerson   String?
+  kontakPhone    String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  pendaftaran    PendaftaranKejurda[]
-  pengcabPengaju Pengcab? @relation(fields: [pengcabId], references: [id], onDelete: SetNull)
+  pendaftaran       PendaftaranKejurda[]
+  persyaratanFields PersyaratanField[]
+  pengcabPengaju    Pengcab? @relation(fields: [pengcabId], references: [id], onDelete: SetNull)
 
   @@map("kejurda")
 }
 
+enum TargetPeserta {
+  CLUB
+  UMUM
+}
+
+// ==================== DYNAMIC FORM FIELDS ====================
+model PersyaratanField {
+  id         Int      @id @default(autoincrement())
+  kejurdaId  Int
+  label      String   // Field label e.g., "Foto KTP", "Surat Keterangan Sehat"
+  tipe       TipeField @default(TEXT)
+  required   Boolean  @default(true)
+  options    Json?    // For SELECT/RADIO: ["Option 1", "Option 2"]
+  keterangan String?  @db.Text // Helper text
+  urutan     Int      @default(0)
+  aktif      Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  kejurda Kejurda @relation(fields: [kejurdaId], references: [id], onDelete: Cascade)
+
+  @@map("persyaratan_fields")
+}
+
+enum TipeField {
+  TEXT
+  TEXTAREA
+  NUMBER
+  DATE
+  SELECT
+  RADIO
+  CHECKBOX
+  FILE_IMAGE
+  FILE_PDF
+  FILE_ANY
+}
+
 model PendaftaranKejurda {
-  id           Int            @id @default(autoincrement())
-  kejurdaId    Int
-  userId       Int
-  pengcabId    Int?
-  namaAtlet    String
-  kategori     String
-  kelasTanding String?
-  dokumen      String?
-  status       StatusApproval @default(PENDING)
-  catatanAdmin String?        @db.Text
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
+  id              Int            @id @default(autoincrement())
+  kejurdaId       Int
+  userId          Int
+  pengcabId       Int?
+  namaAtlet       String
+  kategori        String
+  kelasTanding    String?
+  dokumen         String?
+  dataPersyaratan Json?          // Stores dynamic form submissions: { fieldId: value, ... }
+  status          StatusApproval @default(PENDING)
+  catatanAdmin    String?        @db.Text
+  catatanPeserta  String?        @db.Text
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 
   kejurda  Kejurda  @relation(fields: [kejurdaId], references: [id], onDelete: Cascade)
   user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -207,4 +252,17 @@ model SiteConfig {
   updatedAt DateTime @updatedAt
 
   @@map("site_config")
+}
+
+model StrukturOrganisasi {
+  id        Int      @id @default(autoincrement())
+  jabatan   String   // e.g., "Ketua Umum", "Sekretaris", "Bendahara", "Seksi Humas"
+  nama      String
+  foto      String?  // path to photo
+  urutan    Int      @default(0)
+  aktif     Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("struktur_organisasi")
 }
