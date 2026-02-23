@@ -10,6 +10,9 @@ router.get('/struktur', ctrl.getStruktur); // Public untuk landing page
 // ── Admin routes ──
 router.use(authenticate, isAdmin);
 
+// Debug: upload health check  
+router.get('/upload-health', ctrl.checkUploadHealth);
+
 // Hero Slides
 router.get('/hero-slides', ctrl.getHeroSlides);
 router.post('/hero-slides', upload.single('gambar'), ctrl.createHeroSlide);

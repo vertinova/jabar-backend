@@ -33,6 +33,7 @@ enum Role {
   PENGCAB
   USER
   PENYELENGGARA
+  UMUM
 }
 
 // ==================== PENGCAB ====================

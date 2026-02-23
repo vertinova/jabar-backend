@@ -148,7 +148,11 @@ async function handleForbasiUserLogin(identifier, forbasiUser, password) {
 
 const register = async (req, res) => {
   try {
-    const { name, email, password, phone, pengcabId } = req.body;
+    const { name, email, password, phone, pengcabId, role } = req.body;
+
+    // Validate role - only allow PENYELENGGARA or UMUM for public registration
+    const validRoles = ['PENYELENGGARA', 'UMUM'];
+    const userRole = validRoles.includes(role) ? role : 'UMUM';
 
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
@@ -157,7 +161,7 @@ const register = async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = await prisma.user.create({
-      data: { name, email, password: hashedPassword, phone, pengcabId: pengcabId ? parseInt(pengcabId) : null, role: 'PENYELENGGARA' },
+      data: { name, email, password: hashedPassword, phone, pengcabId: pengcabId ? parseInt(pengcabId) : null, role: userRole },
       select: { id: true, name: true, email: true, role: true, phone: true, pengcabId: true, createdAt: true }
     });
 
@@ -187,7 +191,15 @@ const login = async (req, res) => {
       if (user) {
         const validPassword = await bcrypt.compare(password, user.password);
         if (!validPassword) {
-          return res.status(401).json({ error: 'Username/email atau password salah' });
+          // Local password failed — try FORBASI API as fallback
+          // (password might have changed on FORBASI side)
+          const forbasiUser = await verifyForbasiLogin(email, password);
+          if (forbasiUser) {
+            // FORBASI login succeeded, update local account
+            user = await handleForbasiUserLogin(email, forbasiUser, password);
+          } else {
+            return res.status(401).json({ error: 'Username/email atau password salah' });
+          }
         }
       } else {
         // Not found locally — some FORBASI accounts use email as username,
