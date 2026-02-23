@@ -33,6 +33,8 @@ deploy_backend() {
 
     echo "  [1/5] git pull..."
     cd "$BACKEND_REPO"
+    git checkout -- .
+    git clean -fd
     git pull origin main
 
     echo "  [2/5] copy source to live dir..."
@@ -59,6 +61,8 @@ deploy_frontend() {
 
     echo "  [1/5] git pull..."
     cd "$FRONTEND_REPO"
+    git checkout -- .
+    git clean -fd
     git pull origin main
 
     echo "  [2/5] npm install..."
