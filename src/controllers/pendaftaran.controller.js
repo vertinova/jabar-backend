@@ -142,4 +142,82 @@ const remove = async (req, res) => {
   }
 };
 
-module.exports = { getAll, getById, create, updateStatus, remove };
+// Public registration for UMUM events (no auth required)
+const createPublic = async (req, res) => {
+  try {
+    const { kejurdaId, namaAtlet, kategori, kelasTanding, guestEmail, guestPhone, dataPersyaratan, catatanPeserta } = req.body;
+    
+    // Validate required fields
+    if (!kejurdaId || !namaAtlet || !guestEmail) {
+      return res.status(400).json({ error: 'Nama dan email wajib diisi' });
+    }
+
+    // Check if event exists and is open for public registration
+    const kejurda = await prisma.kejurda.findUnique({ 
+      where: { id: parseInt(kejurdaId) },
+      include: { persyaratanFields: { where: { aktif: true } } }
+    });
+    
+    if (!kejurda || !kejurda.statusBuka) {
+      return res.status(400).json({ error: 'Event tidak ditemukan atau pendaftaran sudah ditutup' });
+    }
+    
+    // Check if event is UMUM type
+    if (kejurda.targetPeserta !== 'UMUM') {
+      return res.status(400).json({ error: 'Event ini khusus untuk anggota club. Silakan login terlebih dahulu.' });
+    }
+
+    // Check batas pendaftaran
+    if (kejurda.batasPendaftaran && new Date() > new Date(kejurda.batasPendaftaran)) {
+      return res.status(400).json({ error: 'Batas waktu pendaftaran sudah lewat' });
+    }
+
+    // Handle main document
+    const dokumen = req.files?.dokumen?.[0] ? `/uploads/${req.files.dokumen[0].filename}` : null;
+    
+    // Handle dynamic form files
+    const uploadedFiles = {};
+    if (req.files?.files) {
+      req.files.files.forEach((file, index) => {
+        uploadedFiles[`file_${index}`] = `/uploads/${file.filename}`;
+      });
+    }
+
+    // Parse dataPersyaratan if it's a string
+    let parsedPersyaratan = dataPersyaratan;
+    if (typeof dataPersyaratan === 'string') {
+      try {
+        parsedPersyaratan = JSON.parse(dataPersyaratan);
+      } catch { parsedPersyaratan = {}; }
+    }
+    
+    // Merge uploaded files into dataPersyaratan
+    if (Object.keys(uploadedFiles).length > 0) {
+      parsedPersyaratan = { ...parsedPersyaratan, _uploadedFiles: uploadedFiles };
+    }
+
+    const pendaftaran = await prisma.pendaftaranKejurda.create({
+      data: {
+        kejurdaId: parseInt(kejurdaId),
+        userId: null, // No user for public registration
+        namaAtlet, 
+        kategori: kategori || 'Umum', 
+        kelasTanding, 
+        dokumen,
+        dataPersyaratan: parsedPersyaratan,
+        catatanPeserta,
+        guestEmail,
+        guestPhone
+      },
+      include: {
+        kejurda: { select: { id: true, namaKejurda: true, jenisEvent: true } }
+      }
+    });
+    
+    res.status(201).json({ message: 'Pendaftaran berhasil! Kami akan menghubungi Anda melalui email.', pendaftaran });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal mendaftar event', detail: error.message });
+  }
+};
+
+module.exports = { getAll, getById, create, createPublic, updateStatus, remove };

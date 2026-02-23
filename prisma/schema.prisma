@@ -187,7 +187,7 @@ enum TipeField {
 model PendaftaranKejurda {
   id              Int            @id @default(autoincrement())
   kejurdaId       Int
-  userId          Int
+  userId          Int?           // Nullable for UMUM registration without login
   pengcabId       Int?
   namaAtlet       String
   kategori        String
@@ -197,11 +197,14 @@ model PendaftaranKejurda {
   status          StatusApproval @default(PENDING)
   catatanAdmin    String?        @db.Text
   catatanPeserta  String?        @db.Text
+  // Guest fields for UMUM registration (when userId is null)
+  guestEmail      String?
+  guestPhone      String?
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
   kejurda  Kejurda  @relation(fields: [kejurdaId], references: [id], onDelete: Cascade)
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user     User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
   pengcab  Pengcab? @relation(fields: [pengcabId], references: [id], onDelete: SetNull)
 
   @@map("pendaftaran_kejurda")
