@@ -1,0 +1,274 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== USERS & AUTH ====================
+model User {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String   @unique
+  password  String
+  role      Role     @default(USER)
+  phone     String?
+  avatar    String?
+  pengcabId Int?
+  forbasiId Int?     @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  pengcab            Pengcab?             @relation(fields: [pengcabId], references: [id], onDelete: SetNull)
+  rekomendasiEvents  RekomendasiEvent[]
+  pendaftaranKejurda PendaftaranKejurda[]
+
+  @@map("users")
+}
+
+enum Role {
+  ADMIN
+  PENGCAB
+  USER
+  PENYELENGGARA
+  UMUM
+}
+
+// ==================== PENGCAB ====================
+model Pengcab {
+  id          Int      @id @default(autoincrement())
+  forbasiId   Int?     @unique
+  nama        String
+  kota        String
+  ketua       String   @default("Belum ditentukan")
+  sekretaris  String?
+  bendahara   String?
+  alamat      String?  @db.Text
+  phone       String?
+  email       String?
+  logo        String?
+  username    String?  @unique
+  status      StatusAktif @default(AKTIF)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users              User[]
+  rekomendasiEvents  RekomendasiEvent[]
+  pendaftaranKejurda PendaftaranKejurda[]
+  kejurdaDiajukan    Kejurda[]
+
+  @@map("pengcab")
+}
+
+enum StatusAktif {
+  AKTIF
+  NONAKTIF
+}
+
+// ==================== REKOMENDASI EVENT ====================
+model RekomendasiEvent {
+  id              Int            @id @default(autoincrement())
+  namaEvent       String
+  jenisEvent      String
+  tanggalMulai    DateTime
+  tanggalSelesai  DateTime
+  lokasi          String
+  deskripsi       String?        @db.Text
+  penyelenggara   String
+  kontakPerson    String?
+  dokumenSurat    String?
+  persyaratan     Json?          // Stores all persyaratan data (checkboxes, text, file paths)
+  mataLomba       Json?          // Stores mata lomba selections with individual schedules
+  status          StatusApproval @default(PENDING)
+  catatanPengcab  String?        @db.Text
+  catatanAdmin    String?        @db.Text
+  approvedPengcabAt DateTime?
+  approvedPengdaAt  DateTime?
+  userId          Int
+  pengcabId       Int?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pengcab Pengcab? @relation(fields: [pengcabId], references: [id], onDelete: SetNull)
+
+  @@map("rekomendasi_events")
+}
+
+enum StatusApproval {
+  PENDING
+  APPROVED_PENGCAB
+  DISETUJUI
+  DITOLAK
+}
+
+// ==================== KEJURDA ====================
+
+model KategoriEvent {
+  id     Int     @id @default(autoincrement())
+  kode   String  @unique // e.g. KEJURDA, LATGAB, TOT
+  nama   String  // Display name, editable
+  warna  String  @default("green") // Tailwind color key
+  grup   String  @default("kegiatan") // kompetisi | kegiatan
+  urutan Int     @default(0)
+  aktif  Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("kategori_event")
+}
+
+model Kejurda {
+  id             Int      @id @default(autoincrement())
+  namaKejurda    String
+  jenisEvent     String   @default("KEJURDA") // KEJURDA, KEJURCAB, EVENT_REGULER
+  targetPeserta  TargetPeserta @default(CLUB) // CLUB = via akun club, UMUM = via landing page
+  tanggalMulai   DateTime
+  tanggalSelesai DateTime
+  lokasi         String
+  deskripsi      String?  @db.Text
+  poster         String?
+  statusBuka     Boolean  @default(true)
+  earlyBirdAktif Boolean  @default(true)
+  pengcabId      Int?
+  statusApproval String   @default("DISETUJUI") // PENDING, DISETUJUI, DITOLAK
+  catatanAdmin   String?  @db.Text
+  biayaPendaftaran Decimal? @db.Decimal(12, 2)
+  batasPendaftaran DateTime?
+  kontakPerson   String?
+  kontakPhone    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  pendaftaran       PendaftaranKejurda[]
+  persyaratanFields PersyaratanField[]
+  pengcabPengaju    Pengcab? @relation(fields: [pengcabId], references: [id], onDelete: SetNull)
+
+  @@map("kejurda")
+}
+
+enum TargetPeserta {
+  CLUB
+  UMUM
+}
+
+// ==================== DYNAMIC FORM FIELDS ====================
+model PersyaratanField {
+  id         Int      @id @default(autoincrement())
+  kejurdaId  Int
+  label      String   // Field label e.g., "Foto KTP", "Surat Keterangan Sehat"
+  tipe       TipeField @default(TEXT)
+  required   Boolean  @default(true)
+  options    Json?    // For SELECT/RADIO: ["Option 1", "Option 2"]
+  keterangan String?  @db.Text // Helper text
+  urutan     Int      @default(0)
+  aktif      Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  kejurda Kejurda @relation(fields: [kejurdaId], references: [id], onDelete: Cascade)
+
+  @@map("persyaratan_fields")
+}
+
+enum TipeField {
+  TEXT
+  TEXTAREA
+  NUMBER
+  DATE
+  SELECT
+  RADIO
+  CHECKBOX
+  FILE_IMAGE
+  FILE_PDF
+  FILE_ANY
+}
+
+model PendaftaranKejurda {
+  id              Int            @id @default(autoincrement())
+  kejurdaId       Int
+  userId          Int?           // Nullable for UMUM registration without login
+  pengcabId       Int?
+  namaAtlet       String
+  kategori        String
+  kelasTanding    String?
+  dokumen         String?
+  dataPersyaratan Json?          // Stores dynamic form submissions: { fieldId: value, ... }
+  status          StatusApproval @default(PENDING)
+  catatanAdmin    String?        @db.Text
+  catatanPeserta  String?        @db.Text
+  qrToken         String?        @unique
+  // Guest fields for UMUM registration (when userId is null)
+  guestEmail      String?
+  guestPhone      String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  kejurda  Kejurda  @relation(fields: [kejurdaId], references: [id], onDelete: Cascade)
+  user     User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pengcab  Pengcab? @relation(fields: [pengcabId], references: [id], onDelete: SetNull)
+
+  @@map("pendaftaran_kejurda")
+}
+
+// ==================== LANDING PAGE CONFIG ====================
+model HeroSlide {
+  id        Int      @id @default(autoincrement())
+  gambar    String   // path to image file
+  caption   String?
+  urutan    Int      @default(0)
+  aktif     Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("hero_slides")
+}
+
+model Berita {
+  id        Int      @id @default(autoincrement())
+  judul     String
+  ringkasan String?  @db.Text
+  konten    String?  @db.LongText
+  gambar    String?
+  penulis   String?
+  aktif     Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("berita")
+}
+
+model Feedback {
+  id        Int      @id @default(autoincrement())
+  nama      String
+  email     String
+  pesan     String   @db.Text
+  dibaca    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@map("feedback")
+}
+
+model SiteConfig {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt
+
+  @@map("site_config")
+}
+
+model StrukturOrganisasi {
+  id        Int      @id @default(autoincrement())
+  jabatan   String   // e.g., "Ketua Umum", "Sekretaris", "Bendahara", "Seksi Humas"
+  nama      String
+  foto      String?  // path to photo
+  urutan    Int      @default(0)
+  aktif     Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("struktur_organisasi")
+}
