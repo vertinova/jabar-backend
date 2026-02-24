@@ -97,6 +97,11 @@ const create = async (req, res) => {
     const parsed = parseFormData(req);
     const isDraft = parsed.submitAction === 'draft';
 
+    if (!isDraft) {
+      if (!parsed.namaEvent) return res.status(400).json({ error: 'Nama event wajib diisi' });
+      if (!parsed.noBilingSimpaskor?.trim()) return res.status(400).json({ error: 'No. Billing Simpaskor wajib diisi' });
+    }
+
     let finalPengcabId = parsed.pengcabId ? parseInt(parsed.pengcabId) : null;
     if (!finalPengcabId) {
       const userProfile = await prisma.user.findUnique({ where: { id: req.user.id }, select: { pengcabId: true } });
@@ -153,6 +158,11 @@ const update = async (req, res) => {
 
     const parsed = parseFormData(req);
     const isDraft = parsed.submitAction === 'draft';
+
+    if (!isDraft) {
+      if (!(parsed.namaEvent || existing.namaEvent)) return res.status(400).json({ error: 'Nama event wajib diisi' });
+      if (!(parsed.noBilingSimpaskor?.trim() || existing.noBilingSimpaskor?.trim())) return res.status(400).json({ error: 'No. Billing Simpaskor wajib diisi' });
+    }
 
     let finalPengcabId = parsed.pengcabId ? parseInt(parsed.pengcabId) : existing.pengcabId;
 
