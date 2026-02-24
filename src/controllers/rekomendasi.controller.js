@@ -54,52 +54,50 @@ const getById = async (req, res) => {
   }
 };
 
-const create = async (req, res) => {
-  try {
-    const { namaEvent, jenisEvent, tanggalMulai, tanggalSelesai, lokasi, deskripsi, penyelenggara, kontakPerson, pengcabId, mataLomba: mataLombaRaw } = req.body;
+// Helper: parse form body and files into a data object
+const parseFormData = (req) => {
+  const { namaEvent, jenisEvent, tanggalMulai, tanggalSelesai, lokasi, deskripsi, penyelenggara, kontakPerson, noBilingSimpaskor, pengcabId, mataLomba: mataLombaRaw, submitAction } = req.body;
 
-    // Parse mataLomba JSON
-    let mataLomba = null;
-    if (mataLombaRaw) {
-      try { mataLomba = JSON.parse(mataLombaRaw); } catch { mataLomba = null; }
-    }
-    
-    // Handle dokumenSurat from uploaded files
-    const files = req.files || [];
-    const dokumenSuratFile = files.find(f => f.fieldname === 'dokumenSurat');
-    const dokumenSurat = dokumenSuratFile ? `/uploads/${dokumenSuratFile.filename}` : null;
+  let mataLomba = null;
+  if (mataLombaRaw) {
+    try { mataLomba = JSON.parse(mataLombaRaw); } catch { mataLomba = null; }
+  }
 
-    // Build persyaratan JSON from form data and uploaded files
-    let persyaratan = null;
-    if (req.body.persyaratan) {
-      try {
-        persyaratan = JSON.parse(req.body.persyaratan);
-      } catch { persyaratan = {}; }
-      
-      // Map uploaded files to persyaratan paths
-      const fileFields = [
-        'suratIzinSekolah', 'suratIzinKepolisian', 'suratRekomendasiDinas',
-        'suratIzinVenue', 'suratRekomendasiPPI',
-        'fotoLapangan', 'fotoTempatIbadah', 'fotoBarak', 'fotoAreaParkir',
-        'fotoRuangKesehatan', 'fotoMCK', 'fotoTempatSampah', 'fotoRuangKomisi',
-        'faktaIntegritasKomisi', 'faktaIntegritasHonor',
-        'desainSertifikat'
-      ];
-      
-      for (const field of fileFields) {
-        const uploadedFile = files.find(f => f.fieldname === field);
-        if (uploadedFile) {
-          // Store file path in persyaratan JSON
-          if (!persyaratan[field]) persyaratan[field] = {};
-          if (typeof persyaratan[field] === 'object') {
-            persyaratan[field].file = `/uploads/${uploadedFile.filename}`;
-          }
+  const files = req.files || [];
+  const dokumenSuratFile = files.find(f => f.fieldname === 'dokumenSurat');
+  const dokumenSurat = dokumenSuratFile ? `/uploads/${dokumenSuratFile.filename}` : null;
+
+  let persyaratan = null;
+  if (req.body.persyaratan) {
+    try { persyaratan = JSON.parse(req.body.persyaratan); } catch { persyaratan = {}; }
+    const fileFields = [
+      'suratIzinSekolah', 'suratIzinKepolisian', 'suratRekomendasiDinas',
+      'suratIzinVenue', 'suratRekomendasiPPI',
+      'fotoLapangan', 'fotoTempatIbadah', 'fotoBarak', 'fotoAreaParkir',
+      'fotoRuangKesehatan', 'fotoMCK', 'fotoTempatSampah', 'fotoRuangKomisi',
+      'faktaIntegritasKomisi', 'faktaIntegritasHonor',
+      'desainSertifikat'
+    ];
+    for (const field of fileFields) {
+      const uploadedFile = files.find(f => f.fieldname === field);
+      if (uploadedFile) {
+        if (!persyaratan[field]) persyaratan[field] = {};
+        if (typeof persyaratan[field] === 'object') {
+          persyaratan[field].file = `/uploads/${uploadedFile.filename}`;
         }
       }
     }
+  }
 
-    // Auto-assign pengcab from user profile if not provided
-    let finalPengcabId = pengcabId ? parseInt(pengcabId) : null;
+  return { namaEvent, jenisEvent, tanggalMulai, tanggalSelesai, lokasi, deskripsi, penyelenggara, kontakPerson, noBilingSimpaskor, pengcabId, mataLomba, dokumenSurat, persyaratan, submitAction };
+};
+
+const create = async (req, res) => {
+  try {
+    const parsed = parseFormData(req);
+    const isDraft = parsed.submitAction === 'draft';
+
+    let finalPengcabId = parsed.pengcabId ? parseInt(parsed.pengcabId) : null;
     if (!finalPengcabId) {
       const userProfile = await prisma.user.findUnique({ where: { id: req.user.id }, select: { pengcabId: true } });
       if (userProfile?.pengcabId) finalPengcabId = userProfile.pengcabId;
@@ -107,12 +105,19 @@ const create = async (req, res) => {
 
     const event = await prisma.rekomendasiEvent.create({
       data: {
-        namaEvent, jenisEvent,
-        tanggalMulai: new Date(tanggalMulai),
-        tanggalSelesai: new Date(tanggalSelesai),
-        lokasi, deskripsi, penyelenggara, kontakPerson, dokumenSurat,
-        persyaratan: persyaratan || undefined,
-        mataLomba: mataLomba || undefined,
+        namaEvent: parsed.namaEvent,
+        jenisEvent: parsed.jenisEvent || null,
+        tanggalMulai: parsed.tanggalMulai ? new Date(parsed.tanggalMulai) : null,
+        tanggalSelesai: parsed.tanggalSelesai ? new Date(parsed.tanggalSelesai) : null,
+        lokasi: parsed.lokasi || null,
+        deskripsi: parsed.deskripsi || null,
+        penyelenggara: parsed.penyelenggara || null,
+        kontakPerson: parsed.kontakPerson || null,
+        noBilingSimpaskor: parsed.noBilingSimpaskor || null,
+        dokumenSurat: parsed.dokumenSurat,
+        persyaratan: parsed.persyaratan || undefined,
+        mataLomba: parsed.mataLomba || undefined,
+        status: isDraft ? 'DRAFT' : 'PENDING',
         userId: req.user.id,
         pengcabId: finalPengcabId
       },
@@ -121,9 +126,78 @@ const create = async (req, res) => {
         pengcab: { select: { id: true, nama: true } }
       }
     });
-    res.status(201).json({ message: 'Permohonan rekomendasi berhasil diajukan', event });
+    res.status(201).json({
+      message: isDraft ? 'Draft berhasil disimpan' : 'Permohonan rekomendasi berhasil diajukan',
+      event
+    });
   } catch (error) {
     res.status(500).json({ error: 'Gagal mengajukan rekomendasi', detail: error.message });
+  }
+};
+
+const update = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const existing = await prisma.rekomendasiEvent.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Data tidak ditemukan' });
+
+    // Only owner can edit
+    if (req.user.role !== 'ADMIN' && existing.userId !== req.user.id) {
+      return res.status(403).json({ error: 'Akses ditolak' });
+    }
+
+    // Can only edit DRAFT or DITOLAK
+    if (!['DRAFT', 'DITOLAK'].includes(existing.status)) {
+      return res.status(400).json({ error: 'Hanya event berstatus Draft atau Ditolak yang bisa diedit' });
+    }
+
+    const parsed = parseFormData(req);
+    const isDraft = parsed.submitAction === 'draft';
+
+    let finalPengcabId = parsed.pengcabId ? parseInt(parsed.pengcabId) : existing.pengcabId;
+
+    const data = {
+      namaEvent: parsed.namaEvent || existing.namaEvent,
+      jenisEvent: parsed.jenisEvent || existing.jenisEvent,
+      tanggalMulai: parsed.tanggalMulai ? new Date(parsed.tanggalMulai) : existing.tanggalMulai,
+      tanggalSelesai: parsed.tanggalSelesai ? new Date(parsed.tanggalSelesai) : existing.tanggalSelesai,
+      lokasi: parsed.lokasi || existing.lokasi,
+      deskripsi: parsed.deskripsi ?? existing.deskripsi,
+      penyelenggara: parsed.penyelenggara || existing.penyelenggara,
+      kontakPerson: parsed.kontakPerson ?? existing.kontakPerson,
+      noBilingSimpaskor: parsed.noBilingSimpaskor ?? existing.noBilingSimpaskor,
+      pengcabId: finalPengcabId,
+      status: isDraft ? 'DRAFT' : 'PENDING',
+    };
+
+    // Only update file fields if new ones provided
+    if (parsed.dokumenSurat) data.dokumenSurat = parsed.dokumenSurat;
+    if (parsed.persyaratan) data.persyaratan = parsed.persyaratan;
+    if (parsed.mataLomba) data.mataLomba = parsed.mataLomba;
+
+    // Reset approval fields when resubmitting
+    if (!isDraft) {
+      data.catatanPengcab = null;
+      data.catatanAdmin = null;
+      data.approvedPengcabAt = null;
+      data.approvedPengdaAt = null;
+    }
+
+    const event = await prisma.rekomendasiEvent.update({
+      where: { id },
+      data,
+      include: {
+        user: { select: { id: true, name: true } },
+        pengcab: { select: { id: true, nama: true } }
+      }
+    });
+
+    res.json({
+      message: isDraft ? 'Draft berhasil disimpan' : 'Permohonan berhasil diajukan ulang',
+      event
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal mengupdate data', detail: error.message });
   }
 };
 
@@ -171,4 +245,4 @@ const remove = async (req, res) => {
   }
 };
 
-module.exports = { getAll, getById, create, updateStatus, remove };
+module.exports = { getAll, getById, create, update, updateStatus, remove };

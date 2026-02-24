@@ -71,17 +71,18 @@ enum StatusAktif {
 model RekomendasiEvent {
   id              Int            @id @default(autoincrement())
   namaEvent       String
-  jenisEvent      String
-  tanggalMulai    DateTime
-  tanggalSelesai  DateTime
-  lokasi          String
+  jenisEvent      String?
+  tanggalMulai    DateTime?
+  tanggalSelesai  DateTime?
+  lokasi          String?
   deskripsi       String?        @db.Text
-  penyelenggara   String
+  penyelenggara   String?
   kontakPerson    String?
+  noBilingSimpaskor String?
   dokumenSurat    String?
   persyaratan     Json?          // Stores all persyaratan data (checkboxes, text, file paths)
   mataLomba       Json?          // Stores mata lomba selections with individual schedules
-  status          StatusApproval @default(PENDING)
+  status          StatusApproval @default(DRAFT)
   catatanPengcab  String?        @db.Text
   catatanAdmin    String?        @db.Text
   approvedPengcabAt DateTime?
@@ -98,6 +99,7 @@ model RekomendasiEvent {
 }
 
 enum StatusApproval {
+  DRAFT
   PENDING
   APPROVED_PENGCAB
   DISETUJUI
