@@ -262,6 +262,21 @@ model SiteConfig {
   @@map("site_config")
 }
 
+// ==================== FORMAT DOKUMEN (TEMPLATE DOWNLOAD) ====================
+model FormatDokumen {
+  id        Int      @id @default(autoincrement())
+  nama      String          // Display name e.g. "Pakta Integritas"
+  deskripsi String?         // Short description
+  filePath  String          // Path to the file in uploads/
+  kategori  String  @default("umum") // umum, administratif, perangkat, etc.
+  urutan    Int     @default(0)
+  aktif     Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("format_dokumen")
+}
+
 model StrukturOrganisasi {
   id        Int      @id @default(autoincrement())
   jabatan   String   // e.g., "Ketua Umum", "Sekretaris", "Bendahara", "Seksi Humas"

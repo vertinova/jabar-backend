@@ -12,6 +12,7 @@ const pengcabPanelRoutes = require('./routes/pengcabPanel.routes');
 const adminUserRoutes = require('./routes/adminUser.routes');
 const kategoriEventRoutes = require('./routes/kategoriEvent.routes');
 const landingConfigRoutes = require('./routes/landingConfig.routes');
+const formatDokumenRoutes = require('./routes/formatDokumen.routes');
 
 const app = express();
 
@@ -32,6 +33,7 @@ app.use('/api/pengcab-panel', pengcabPanelRoutes);
 app.use('/api/admin-users', adminUserRoutes);
 app.use('/api/kategori-event', kategoriEventRoutes);
 app.use('/api/landing', landingConfigRoutes);
+app.use('/api/format-dokumen', formatDokumenRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

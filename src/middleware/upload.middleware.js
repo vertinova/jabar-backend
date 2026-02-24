@@ -18,11 +18,17 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req, file, cb) => {
-  const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+  const allowedTypes = [
+    'image/jpeg', 'image/png', 'image/webp', 'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  ];
   if (allowedTypes.includes(file.mimetype)) {
     cb(null, true);
   } else {
-    cb(new Error('Tipe file tidak diizinkan. Gunakan JPG, PNG, WEBP, atau PDF.'), false);
+    cb(new Error('Tipe file tidak diizinkan. Gunakan JPG, PNG, WEBP, PDF, DOC, DOCX, XLS, atau XLSX.'), false);
   }
 };
 

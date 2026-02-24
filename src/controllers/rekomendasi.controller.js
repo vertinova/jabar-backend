@@ -75,7 +75,7 @@ const parseFormData = (req) => {
       'suratIzinVenue', 'suratRekomendasiPPI',
       'fotoLapangan', 'fotoTempatIbadah', 'fotoBarak', 'fotoAreaParkir',
       'fotoRuangKesehatan', 'fotoMCK', 'fotoTempatSampah', 'fotoRuangKomisi',
-      'faktaIntegritasKomisi', 'faktaIntegritasHonor',
+      'faktaIntegritasKomisi', 'faktaIntegritasHonor', 'faktaIntegritasPanitia',
       'desainSertifikat'
     ];
     for (const field of fileFields) {
