@@ -1,4 +1,5 @@
 const prisma = require('../lib/prisma');
+const { generateSuratRekomendasi } = require('../lib/suratGenerator');
 
 const getAll = async (req, res) => {
   try {
@@ -232,8 +233,28 @@ const updateStatus = async (req, res) => {
 
     const event = await prisma.rekomendasiEvent.update({
       where: { id: parseInt(req.params.id) },
-      data
+      data,
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+        pengcab: { select: { id: true, nama: true, kota: true } }
+      }
     });
+
+    // Generate surat rekomendasi PDF when approved (DISETUJUI)
+    if (status === 'DISETUJUI') {
+      try {
+        const suratPath = await generateSuratRekomendasi(event);
+        await prisma.rekomendasiEvent.update({
+          where: { id: event.id },
+          data: { suratRekomendasi: suratPath }
+        });
+        event.suratRekomendasi = suratPath;
+      } catch (pdfErr) {
+        console.error('Gagal generate surat rekomendasi:', pdfErr.message);
+        // Don't fail the approval, just log the error
+      }
+    }
+
     res.json({ message: `Status rekomendasi diubah menjadi ${status}`, event });
   } catch (error) {
     res.status(500).json({ error: 'Gagal update status', detail: error.message });

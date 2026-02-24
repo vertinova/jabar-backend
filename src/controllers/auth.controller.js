@@ -1,7 +1,7 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const prisma = require('../lib/prisma');
-const { verifyForbasiLogin, fetchForbasiKta, fixForbasiFileUrl } = require('../lib/forbasi');
+const { verifyForbasiLogin, fetchForbasiKta, fixForbasiFileUrl, changeForbasiPassword } = require('../lib/forbasi');
 
 /**
  * Handle FORBASI user login — find/create local account from FORBASI data.
@@ -278,11 +278,33 @@ const updateProfile = async (req, res) => {
       const existingUser = await prisma.user.findUnique({ where: { id: req.user.id } });
       const validPassword = await bcrypt.compare(currentPassword, existingUser.password);
       if (!validPassword) {
-        return res.status(400).json({ error: 'Password lama tidak sesuai' });
+        // If local password check fails, try verifying against FORBASI API
+        if (existingUser.forbasiId) {
+          const forbasiCheck = await verifyForbasiLogin(existingUser.email, currentPassword);
+          if (!forbasiCheck) {
+            return res.status(400).json({ error: 'Password lama tidak sesuai' });
+          }
+        } else {
+          return res.status(400).json({ error: 'Password lama tidak sesuai' });
+        }
       }
       if (newPassword.length < 6) {
         return res.status(400).json({ error: 'Password baru minimal 6 karakter' });
       }
+
+      // If FORBASI-linked account, also update on FORBASI API
+      if (existingUser.forbasiId) {
+        try {
+          const forbasiResult = await changeForbasiPassword(existingUser.forbasiId, currentPassword, newPassword);
+          if (!forbasiResult || !forbasiResult.success) {
+            console.warn('FORBASI password sync warning:', forbasiResult?.message || 'Unknown error');
+            // Continue anyway - update local password even if FORBASI sync fails
+          }
+        } catch (err) {
+          console.warn('FORBASI password sync error:', err.message);
+        }
+      }
+
       updateData.password = await bcrypt.hash(newPassword, 10);
     }
 
