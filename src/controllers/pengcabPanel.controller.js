@@ -116,7 +116,7 @@ const approveRekomendasi = async (req, res) => {
       where: { id: item.id },
       data: {
         status: 'APPROVED_PENGCAB',
-        catatanPengcab: req.body.catatan || null,
+        catatanPengcab: req.body?.catatan || null,
         approvedPengcabAt: new Date(),
       }
     });
@@ -142,7 +142,7 @@ const rejectRekomendasi = async (req, res) => {
       where: { id: item.id },
       data: {
         status: 'DITOLAK',
-        catatanPengcab: req.body.catatan || 'Ditolak oleh pengcab',
+        catatanPengcab: req.body?.catatan || 'Ditolak oleh pengcab',
       }
     });
     res.json(updated);
