@@ -225,7 +225,8 @@ const updateStatus = async (req, res) => {
       if (catatanAdmin) data.catatanAdmin = catatanAdmin;
     }
     if (status === 'DITOLAK') {
-      if (catatanAdmin) data.catatanAdmin = catatanAdmin;
+      if (!catatanAdmin?.trim()) return res.status(400).json({ error: 'Catatan alasan penolakan wajib diisi' });
+      data.catatanAdmin = catatanAdmin.trim();
       if (catatanPengcab) data.catatanPengcab = catatanPengcab;
     }
 

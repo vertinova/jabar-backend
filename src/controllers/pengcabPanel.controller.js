@@ -138,11 +138,14 @@ const rejectRekomendasi = async (req, res) => {
     if (item.pengcabId !== user.pengcabId) return res.status(403).json({ error: 'Akses ditolak' });
     if (item.status !== 'PENDING') return res.status(400).json({ error: 'Status harus PENDING untuk ditolak' });
 
+    const catatan = req.body?.catatan?.trim();
+    if (!catatan) return res.status(400).json({ error: 'Catatan alasan penolakan wajib diisi' });
+
     const updated = await prisma.rekomendasiEvent.update({
       where: { id: item.id },
       data: {
         status: 'DITOLAK',
-        catatanPengcab: req.body?.catatan || 'Ditolak oleh pengcab',
+        catatanPengcab: catatan,
       }
     });
     res.json(updated);
