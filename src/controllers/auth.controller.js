@@ -389,4 +389,82 @@ const getKta = async (req, res) => {
   }
 };
 
-module.exports = { register, login, getProfile, updateProfile, getUserDashboard, getKta };
+// ── Google OAuth Login/Register ──
+const googleAuth = async (req, res) => {
+  try {
+    const { credential, role } = req.body;
+    if (!credential) return res.status(400).json({ error: 'Token Google tidak ditemukan' });
+
+    // Verify the Google ID token via Google's tokeninfo endpoint
+    const response = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${credential}`);
+    if (!response.ok) {
+      return res.status(401).json({ error: 'Token Google tidak valid' });
+    }
+    const googleUser = await response.json();
+
+    // Validate the token audience matches our client ID
+    const expectedClientId = process.env.GOOGLE_CLIENT_ID;
+    if (expectedClientId && googleUser.aud !== expectedClientId) {
+      return res.status(401).json({ error: 'Token Google tidak valid untuk aplikasi ini' });
+    }
+
+    const { sub: googleId, email, name, picture } = googleUser;
+    if (!email) return res.status(400).json({ error: 'Email tidak ditemukan dari akun Google' });
+
+    // Only allow PENYELENGGARA and UMUM roles for Google login
+    const validRoles = ['PENYELENGGARA', 'UMUM'];
+    const userRole = validRoles.includes(role) ? role : 'UMUM';
+
+    // Find existing user by googleId or email
+    let user = await prisma.user.findFirst({
+      where: { OR: [{ googleId }, { email }] }
+    });
+
+    if (user) {
+      // Link Google ID if not already linked
+      const updateData = {};
+      if (!user.googleId) updateData.googleId = googleId;
+      if (picture && !user.avatar) updateData.avatar = picture;
+      if (Object.keys(updateData).length > 0) {
+        user = await prisma.user.update({ where: { id: user.id }, data: updateData });
+      }
+    } else {
+      // Create new account — generate a random password (user logs in via Google)
+      const randomPassword = require('crypto').randomBytes(32).toString('hex');
+      const hashedPassword = await bcrypt.hash(randomPassword, 10);
+      user = await prisma.user.create({
+        data: {
+          name: name || email.split('@')[0],
+          email,
+          password: hashedPassword,
+          googleId,
+          avatar: picture || null,
+          role: userRole,
+        }
+      });
+    }
+
+    // Fetch pengcab name
+    let pengcabName = null;
+    if (user.pengcabId) {
+      const pc = await prisma.pengcab.findUnique({ where: { id: user.pengcabId }, select: { nama: true } });
+      if (pc) pengcabName = pc.nama;
+    }
+
+    const token = jwt.sign(
+      { id: user.id, email: user.email, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN }
+    );
+
+    res.json({
+      message: 'Login Google berhasil',
+      user: { id: user.id, name: user.name, email: user.email, role: user.role, phone: user.phone, avatar: user.avatar || null, pengcabId: user.pengcabId, pengcab: pengcabName },
+      token
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal login dengan Google', detail: error.message });
+  }
+};
+
+module.exports = { register, login, getProfile, updateProfile, getUserDashboard, getKta, googleAuth };

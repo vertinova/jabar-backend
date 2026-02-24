@@ -18,6 +18,7 @@ model User {
   avatar    String?
   pengcabId Int?
   forbasiId Int?     @unique
+  googleId  String?  @unique
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
