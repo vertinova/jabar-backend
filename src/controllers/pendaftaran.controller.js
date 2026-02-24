@@ -253,7 +253,7 @@ const verifyQr = async (req, res) => {
       where: { qrToken: token },
       include: {
         kejurda: true,
-        user: { select: { id: true, nama: true, email: true } },
+        user: { select: { id: true, name: true, email: true } },
       },
     });
 
