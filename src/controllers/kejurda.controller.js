@@ -6,7 +6,7 @@ const getAllKejurda = async (req, res) => {
     const kejurda = await prisma.kejurda.findMany({
       orderBy: { tanggalMulai: 'desc' },
       include: {
-        _count: { select: { pendaftaran: true, persyaratanFields: true } },
+        _count: { select: { pendaftaran: true } },
         pengcabPengaju: { select: { id: true, nama: true, kota: true } }
       }
     });
@@ -21,13 +21,9 @@ const getKejurdaById = async (req, res) => {
     const kejurda = await prisma.kejurda.findUnique({
       where: { id: parseInt(req.params.id) },
       include: {
-        persyaratanFields: {
-          where: { aktif: true },
-          orderBy: { urutan: 'asc' }
-        },
         pendaftaran: {
           include: {
-            user: { select: { id: true, name: true, email: true, phone: true } },
+            user: { select: { id: true, name: true, email: true } },
             pengcab: { select: { id: true, nama: true, kota: true } }
           },
           orderBy: { createdAt: 'desc' }
@@ -43,8 +39,9 @@ const getKejurdaById = async (req, res) => {
 
 const createKejurda = async (req, res) => {
   try {
-    const { namaKejurda, tanggalMulai, tanggalSelesai, lokasi, deskripsi, jenisEvent, targetPeserta, biayaPendaftaran, batasPendaftaran, kontakPerson, kontakPhone } = req.body;
+    const { namaKejurda, tanggalMulai, tanggalSelesai, lokasi, deskripsi, jenisEvent, targetPeserta } = req.body;
     const jenis = jenisEvent || 'KEJURDA';
+    const target = targetPeserta || 'CLUB';
     const poster = req.file ? `/uploads/${req.file.filename}` : null;
 
     // KEJURDA & KEJURCAB: max 1 per year
@@ -65,20 +62,17 @@ const createKejurda = async (req, res) => {
       }
     }
 
+    const earlyBird = req.body.earlyBirdAktif !== undefined ? (req.body.earlyBirdAktif === 'true' || req.body.earlyBirdAktif === true) : true;
+
     const kejurda = await prisma.kejurda.create({
       data: {
         namaKejurda,
         jenisEvent: jenis,
-        targetPeserta: targetPeserta || 'CLUB',
+        targetPeserta: target,
         tanggalMulai: new Date(tanggalMulai),
         tanggalSelesai: new Date(tanggalSelesai),
-        lokasi, 
-        deskripsi, 
-        poster,
-        biayaPendaftaran: biayaPendaftaran ? parseFloat(biayaPendaftaran) : null,
-        batasPendaftaran: batasPendaftaran ? new Date(batasPendaftaran) : null,
-        kontakPerson,
-        kontakPhone
+        lokasi, deskripsi, poster,
+        earlyBirdAktif: earlyBird,
       }
     });
     res.status(201).json({ message: 'Event berhasil dibuat', kejurda });
@@ -89,15 +83,14 @@ const createKejurda = async (req, res) => {
 
 const updateKejurda = async (req, res) => {
   try {
-    const { namaKejurda, tanggalMulai, tanggalSelesai, lokasi, deskripsi, statusBuka, jenisEvent, targetPeserta, biayaPendaftaran, batasPendaftaran, kontakPerson, kontakPhone } = req.body;
-    const data = { namaKejurda, lokasi, deskripsi, kontakPerson, kontakPhone };
+    const { namaKejurda, tanggalMulai, tanggalSelesai, lokasi, deskripsi, statusBuka, jenisEvent, targetPeserta } = req.body;
+    const data = { namaKejurda, lokasi, deskripsi };
     if (jenisEvent) data.jenisEvent = jenisEvent;
     if (targetPeserta) data.targetPeserta = targetPeserta;
     if (tanggalMulai) data.tanggalMulai = new Date(tanggalMulai);
     if (tanggalSelesai) data.tanggalSelesai = new Date(tanggalSelesai);
     if (statusBuka !== undefined) data.statusBuka = statusBuka === 'true' || statusBuka === true;
-    if (biayaPendaftaran !== undefined) data.biayaPendaftaran = biayaPendaftaran ? parseFloat(biayaPendaftaran) : null;
-    if (batasPendaftaran !== undefined) data.batasPendaftaran = batasPendaftaran ? new Date(batasPendaftaran) : null;
+    if (req.body.earlyBirdAktif !== undefined) data.earlyBirdAktif = req.body.earlyBirdAktif === 'true' || req.body.earlyBirdAktif === true;
     if (req.file) data.poster = `/uploads/${req.file.filename}`;
 
     // KEJURDA & KEJURCAB: max 1 per year (exclude self)
@@ -149,10 +142,7 @@ const getOpenKejurda = async (req, res) => {
       where,
       orderBy: { tanggalMulai: 'asc' },
       include: {
-        persyaratanFields: {
-          where: { aktif: true },
-          orderBy: { urutan: 'asc' }
-        }
+        pengcabPengaju: { select: { id: true, nama: true, kota: true } }
       }
     });
     res.json(kejurda);
@@ -161,146 +151,37 @@ const getOpenKejurda = async (req, res) => {
   }
 };
 
-// Get single event for public registration
-const getEventForRegistration = async (req, res) => {
+// Quick toggle early bird
+const toggleEarlyBird = async (req, res) => {
   try {
-    const kejurda = await prisma.kejurda.findUnique({
-      where: { id: parseInt(req.params.id) },
-      include: {
-        persyaratanFields: {
-          where: { aktif: true },
-          orderBy: { urutan: 'asc' }
-        }
-      }
-    });
+    const kejurda = await prisma.kejurda.findUnique({ where: { id: parseInt(req.params.id) } });
     if (!kejurda) return res.status(404).json({ error: 'Event tidak ditemukan' });
-    if (!kejurda.statusBuka || kejurda.statusApproval !== 'DISETUJUI') {
-      return res.status(400).json({ error: 'Pendaftaran event ini tidak dibuka' });
-    }
-    res.json(kejurda);
-  } catch (error) {
-    res.status(500).json({ error: 'Gagal mengambil data event', detail: error.message });
-  }
-};
-
-// ========= PERSYARATAN FIELDS CRUD =========
-const getPersyaratanFields = async (req, res) => {
-  try {
-    const fields = await prisma.persyaratanField.findMany({
-      where: { kejurdaId: parseInt(req.params.kejurdaId) },
-      orderBy: { urutan: 'asc' }
+    const updated = await prisma.kejurda.update({
+      where: { id: kejurda.id },
+      data: { earlyBirdAktif: !kejurda.earlyBirdAktif }
     });
-    res.json(fields);
+    res.json({ message: `Early Bird ${updated.earlyBirdAktif ? 'diaktifkan' : 'dinonaktifkan'}`, kejurda: updated });
   } catch (error) {
-    res.status(500).json({ error: 'Gagal mengambil data persyaratan', detail: error.message });
+    res.status(500).json({ error: 'Gagal toggle early bird', detail: error.message });
   }
 };
 
-const createPersyaratanField = async (req, res) => {
+// Quick toggle registration open/close
+const toggleRegistration = async (req, res) => {
   try {
-    const kejurdaId = parseInt(req.params.kejurdaId);
-    const { label, tipe, required, options, keterangan, urutan } = req.body;
-    
-    // Get max urutan if not provided
-    let fieldUrutan = urutan;
-    if (fieldUrutan === undefined) {
-      const maxUrutan = await prisma.persyaratanField.findFirst({
-        where: { kejurdaId },
-        orderBy: { urutan: 'desc' },
-        select: { urutan: true }
-      });
-      fieldUrutan = (maxUrutan?.urutan || 0) + 1;
-    }
-
-    const field = await prisma.persyaratanField.create({
-      data: {
-        kejurdaId,
-        label,
-        tipe: tipe || 'TEXT',
-        required: required !== false,
-        options: options || null,
-        keterangan,
-        urutan: fieldUrutan
-      }
+    const kejurda = await prisma.kejurda.findUnique({ where: { id: parseInt(req.params.id) } });
+    if (!kejurda) return res.status(404).json({ error: 'Event tidak ditemukan' });
+    const updated = await prisma.kejurda.update({
+      where: { id: kejurda.id },
+      data: { statusBuka: !kejurda.statusBuka }
     });
-    res.status(201).json({ message: 'Field persyaratan berhasil ditambahkan', field });
+    res.json({ message: `Pendaftaran ${updated.statusBuka ? 'dibuka' : 'ditutup'}`, kejurda: updated });
   } catch (error) {
-    res.status(500).json({ error: 'Gagal menambahkan field', detail: error.message });
+    res.status(500).json({ error: 'Gagal toggle pendaftaran', detail: error.message });
   }
 };
 
-const updatePersyaratanField = async (req, res) => {
-  try {
-    const { label, tipe, required, options, keterangan, urutan, aktif } = req.body;
-    const data = {};
-    if (label !== undefined) data.label = label;
-    if (tipe !== undefined) data.tipe = tipe;
-    if (required !== undefined) data.required = required;
-    if (options !== undefined) data.options = options;
-    if (keterangan !== undefined) data.keterangan = keterangan;
-    if (urutan !== undefined) data.urutan = urutan;
-    if (aktif !== undefined) data.aktif = aktif;
-
-    const field = await prisma.persyaratanField.update({
-      where: { id: parseInt(req.params.id) },
-      data
-    });
-    res.json({ message: 'Field persyaratan berhasil diupdate', field });
-  } catch (error) {
-    res.status(500).json({ error: 'Gagal update field', detail: error.message });
-  }
-};
-
-const deletePersyaratanField = async (req, res) => {
-  try {
-    await prisma.persyaratanField.delete({
-      where: { id: parseInt(req.params.id) }
-    });
-    res.json({ message: 'Field persyaratan berhasil dihapus' });
-  } catch (error) {
-    res.status(500).json({ error: 'Gagal menghapus field', detail: error.message });
-  }
-};
-
-// Reorder persyaratan fields
-const reorderPersyaratanFields = async (req, res) => {
-  try {
-    const { fieldOrders } = req.body; // Array of { id, urutan }
-    if (!Array.isArray(fieldOrders)) {
-      return res.status(400).json({ error: 'fieldOrders harus berupa array' });
-    }
-
-    await Promise.all(
-      fieldOrders.map(item => 
-        prisma.persyaratanField.update({
-          where: { id: item.id },
-          data: { urutan: item.urutan }
-        })
-      )
-    );
-    res.json({ message: 'Urutan field berhasil diupdate' });
-  } catch (error) {
-    res.status(500).json({ error: 'Gagal mengubah urutan', detail: error.message });
-  }
-};
-
-module.exports = { 
-  getAllKejurda, 
-  getKejurdaById, 
-  createKejurda, 
-  updateKejurda, 
-  removeKejurda, 
-  getOpenKejurda, 
-  getEventForRegistration,
-  approveKejurda, 
-  rejectKejurda,
-  // Persyaratan fields
-  getPersyaratanFields,
-  createPersyaratanField,
-  updatePersyaratanField,
-  deletePersyaratanField,
-  reorderPersyaratanFields
-};
+module.exports = { getAllKejurda, getKejurdaById, createKejurda, updateKejurda, removeKejurda, getOpenKejurda, approveKejurda, rejectKejurda, toggleEarlyBird, toggleRegistration };
 
 // ========= Admin Approval for Pengcab-submitted Kejurcab =========
 async function approveKejurda(req, res) {

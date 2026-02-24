@@ -6,8 +6,7 @@ const DEFAULT_CATEGORIES = [
   { kode: 'KEJURCAB', nama: 'Kejurcab', warna: 'blue', grup: 'kompetisi', urutan: 2 },
   { kode: 'LATGAB', nama: 'Latihan Gabungan', warna: 'purple', grup: 'kegiatan', urutan: 1 },
   { kode: 'TOT', nama: 'TOT', warna: 'teal', grup: 'kegiatan', urutan: 2 },
-  { kode: 'WORKSHOP', nama: 'Workshop', warna: 'indigo', grup: 'kegiatan', urutan: 3 },
-  { kode: 'EVENT_REGULER', nama: 'Event Lainnya', warna: 'amber', grup: 'kegiatan', urutan: 4 },
+  { kode: 'EVENT_REGULER', nama: 'Event Lainnya', warna: 'amber', grup: 'kegiatan', urutan: 3 },
 ];
 
 async function main() {

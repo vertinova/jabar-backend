@@ -131,6 +131,7 @@ model Kejurda {
   deskripsi      String?  @db.Text
   poster         String?
   statusBuka     Boolean  @default(true)
+  earlyBirdAktif Boolean  @default(true)
   pengcabId      Int?
   statusApproval String   @default("DISETUJUI") // PENDING, DISETUJUI, DITOLAK
   catatanAdmin   String?  @db.Text
@@ -198,6 +199,7 @@ model PendaftaranKejurda {
   status          StatusApproval @default(PENDING)
   catatanAdmin    String?        @db.Text
   catatanPeserta  String?        @db.Text
+  qrToken         String?        @unique
   // Guest fields for UMUM registration (when userId is null)
   guestEmail      String?
   guestPhone      String?

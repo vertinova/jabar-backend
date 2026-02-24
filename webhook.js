@@ -55,10 +55,10 @@ function runDeploy(repo) {
   }
   deploying = true;
 
-  const scriptPath = path.join(__dirname, 'deploy.sh');
+  const scriptPath = '/var/www/jabar/repos/backend/deploy.sh';
   console.log(`\n🚀 Starting deploy for ${repo}...`);
 
-  execFile('bash', [scriptPath, repo], { cwd: __dirname, timeout: 120000 }, (err, stdout, stderr) => {
+  execFile('bash', [scriptPath, repo], { cwd: '/var/www/jabar/repos/backend', timeout: 300000 }, (err, stdout, stderr) => {
     deploying = false;
     if (err) {
       console.error('❌ Deploy failed:', err.message);
@@ -137,7 +137,7 @@ const server = http.createServer((req, res) => {
     // Determine which repo (backend / frontend)
     const repoName = (payload.repository && payload.repository.name) || '';
     let target = 'backend'; // default
-    if (repoName.includes('frontend')) {
+    if (repoName === 'forbasi-jabar' || repoName.includes('frontend')) {
       target = 'frontend';
     }
 
