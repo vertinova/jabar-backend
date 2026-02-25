@@ -138,7 +138,7 @@ const create = async (req, res) => {
     });
   } catch (error) {
     console.error('Rekomendasi create error:', error);
-    res.status(500).json({ error: 'Gagal mengajukan rekomendasi', detail: error.message });
+    res.status(500).json({ error: 'Gagal mengajukan rekomendasi', detail: error.message, stack: process.env.NODE_ENV !== 'production' ? error.stack : undefined });
   }
 };
 

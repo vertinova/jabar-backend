@@ -40,8 +40,28 @@ app.use('/api/site-config', siteConfigRoutes);
 app.use('/api/simpaskor', simpaskorRoutes);
 
 // Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', message: 'Forbasi Jabar API is running' });
+app.get('/api/health', async (req, res) => {
+  try {
+    const prisma = require('./lib/prisma');
+    // Quick DB check
+    const result = await prisma.$queryRaw`SELECT 1 as ok`;
+    const migrations = await prisma.$queryRaw`SELECT migration_name FROM _prisma_migrations ORDER BY finished_at DESC LIMIT 3`;
+    res.json({
+      success: true,
+      message: 'Server is running',
+      timestamp: new Date().toISOString(),
+      db: 'connected',
+      latestMigrations: migrations.map(m => m.migration_name)
+    });
+  } catch (err) {
+    res.json({
+      success: true,
+      message: 'Server is running',
+      timestamp: new Date().toISOString(),
+      db: 'error',
+      dbError: err.message
+    });
+  }
 });
 
 // Error handling
