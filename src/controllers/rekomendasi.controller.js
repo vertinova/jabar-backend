@@ -137,6 +137,7 @@ const create = async (req, res) => {
       event
     });
   } catch (error) {
+    console.error('Rekomendasi create error:', error);
     res.status(500).json({ error: 'Gagal mengajukan rekomendasi', detail: error.message });
   }
 };
