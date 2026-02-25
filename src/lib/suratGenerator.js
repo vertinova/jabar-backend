@@ -62,43 +62,44 @@ async function generateSuratRekomendasi(rekomendasiEvent) {
       ];
       const actualLogo = logoCandidates.find(p => fs.existsSync(p)) || null;
 
-      const kopTop = 35;
-      const logoW = 70;
-      const logoH = 70;
+      const kopTop = 30;
+      const logoW = 90;
+      const logoH = 90;
 
       if (actualLogo) {
         doc.image(actualLogo, marginL, kopTop, { width: logoW, height: logoH, fit: [logoW, logoH] });
       }
 
-      // Text block to the right of logo
-      const textLeft = marginL + logoW + 12;
-      const textW = cw - logoW - 12;
+      // Text block to the right of logo – LEFT aligned like official template
+      const textLeft = marginL + logoW + 14;
+      const textW = cw - logoW - 14;
 
       // Green color for header text
       const greenColor = '#1a8c1a';
 
       doc.fontSize(11).font('Helvetica-Bold').fillColor(greenColor)
-        .text('PENGURUS DAERAH', textLeft, kopTop + 4, { width: textW, align: 'center' });
+        .text('PENGURUS DAERAH', textLeft, kopTop + 6, { width: textW, align: 'left' });
       doc.fontSize(15).font('Helvetica-Bold').fillColor(greenColor)
-        .text('FORUM BARIS INDONESIA', textLeft, kopTop + 18, { width: textW, align: 'center' });
+        .text('FORUM BARIS INDONESIA', textLeft, kopTop + 20, { width: textW, align: 'left' });
       doc.fontSize(12).font('Helvetica-Bold').fillColor(greenColor)
-        .text('PROVINSI JAWA BARAT', textLeft, kopTop + 36, { width: textW, align: 'center' });
+        .text('PROVINSI JAWA BARAT', textLeft, kopTop + 38, { width: textW, align: 'left' });
 
-      // Reset to black for address lines
+      // Address lines – green colored, left aligned
+      doc.fontSize(7).font('Helvetica').fillColor(greenColor)
+        .text('Alamat : Jl. Farmakologi 01 Kel.Cigadung Kec.Cibeunying Kaler Kota Bandung, Jawa Barat',
+          textLeft, kopTop + 56, { width: textW, align: 'left' });
+      doc.fontSize(7).font('Helvetica').fillColor(greenColor)
+        .text('Email : forbasijawabarat@gmail.com, IG : forbasi.jabar, Web : jabar.forbasi.or.id',
+          textLeft, kopTop + 66, { width: textW, align: 'left' });
+      doc.fontSize(7).font('Helvetica').fillColor(greenColor)
+        .text('HP : +62 822-9557-6388 (call/wa), +62 851-1951-1898 (wa)',
+          textLeft, kopTop + 76, { width: textW, align: 'left' });
+
+      // Reset to black for body
       doc.fillColor('black');
 
-      doc.fontSize(6.5).font('Helvetica')
-        .text('Alamat : Jl. Farmakologi 01 Kel.Cigadung Kec.Cibeunying Kaler Kota Bandung, Jawa Barat',
-          textLeft, kopTop + 52, { width: textW, align: 'center' });
-      doc.fontSize(6.5).font('Helvetica')
-        .text('Email : forbasijawabarat@gmail.com, IG : forbasi.jabar, Web : jabar.forbasi.or.id',
-          textLeft, kopTop + 61, { width: textW, align: 'center' });
-      doc.fontSize(6.5).font('Helvetica')
-        .text('HP : +62 822-9557-6388 (call/wa), +62 851-1951-1898 (wa)',
-          textLeft, kopTop + 70, { width: textW, align: 'center' });
-
       // Double line separator
-      const lineY = kopTop + 84;
+      const lineY = kopTop + 94;
       doc.moveTo(marginL, lineY).lineTo(pw - marginR, lineY).lineWidth(2.5).strokeColor(greenColor).stroke();
       doc.moveTo(marginL, lineY + 3).lineTo(pw - marginR, lineY + 3).lineWidth(0.5).strokeColor(greenColor).stroke();
       // Reset stroke color
