@@ -62,9 +62,9 @@ async function generateSuratRekomendasi(rekomendasiEvent) {
       ];
       const actualLogo = logoCandidates.find(p => fs.existsSync(p)) || null;
 
-      const kopTop = 30;
-      const logoW = 90;
-      const logoH = 90;
+      const kopTop = 25;
+      const logoW = 130;
+      const logoH = 130;
 
       if (actualLogo) {
         doc.image(actualLogo, marginL, kopTop, { width: logoW, height: logoH, fit: [logoW, logoH] });
@@ -78,28 +78,28 @@ async function generateSuratRekomendasi(rekomendasiEvent) {
       const greenColor = '#1a8c1a';
 
       doc.fontSize(11).font('Helvetica-Bold').fillColor(greenColor)
-        .text('PENGURUS DAERAH', textLeft, kopTop + 6, { width: textW, align: 'left' });
+        .text('PENGURUS DAERAH', textLeft, kopTop + 12, { width: textW, align: 'left' });
       doc.fontSize(15).font('Helvetica-Bold').fillColor(greenColor)
-        .text('FORUM BARIS INDONESIA', textLeft, kopTop + 20, { width: textW, align: 'left' });
+        .text('FORUM BARIS INDONESIA', textLeft, kopTop + 28, { width: textW, align: 'left' });
       doc.fontSize(12).font('Helvetica-Bold').fillColor(greenColor)
-        .text('PROVINSI JAWA BARAT', textLeft, kopTop + 38, { width: textW, align: 'left' });
+        .text('PROVINSI JAWA BARAT', textLeft, kopTop + 48, { width: textW, align: 'left' });
 
       // Address lines – green colored, left aligned
       doc.fontSize(7).font('Helvetica').fillColor(greenColor)
         .text('Alamat : Jl. Farmakologi 01 Kel.Cigadung Kec.Cibeunying Kaler Kota Bandung, Jawa Barat',
-          textLeft, kopTop + 56, { width: textW, align: 'left' });
+          textLeft, kopTop + 68, { width: textW, align: 'left' });
       doc.fontSize(7).font('Helvetica').fillColor(greenColor)
         .text('Email : forbasijawabarat@gmail.com, IG : forbasi.jabar, Web : jabar.forbasi.or.id',
-          textLeft, kopTop + 66, { width: textW, align: 'left' });
+          textLeft, kopTop + 78, { width: textW, align: 'left' });
       doc.fontSize(7).font('Helvetica').fillColor(greenColor)
         .text('HP : +62 822-9557-6388 (call/wa), +62 851-1951-1898 (wa)',
-          textLeft, kopTop + 76, { width: textW, align: 'left' });
+          textLeft, kopTop + 88, { width: textW, align: 'left' });
 
       // Reset to black for body
       doc.fillColor('black');
 
       // Double line separator
-      const lineY = kopTop + 94;
+      const lineY = kopTop + 106;
       doc.moveTo(marginL, lineY).lineTo(pw - marginR, lineY).lineWidth(2.5).strokeColor(greenColor).stroke();
       doc.moveTo(marginL, lineY + 3).lineTo(pw - marginR, lineY + 3).lineWidth(0.5).strokeColor(greenColor).stroke();
       // Reset stroke color
