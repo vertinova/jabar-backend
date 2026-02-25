@@ -87,6 +87,7 @@ model RekomendasiEvent {
   catatanAdmin    String?        @db.Text
   approvedPengcabAt DateTime?
   approvedPengdaAt  DateTime?
+  nomorSurat        String?      // Auto-generated: UM.001/FORBASI-JABAR/II/2026
   suratRekomendasi  String?      // Path to generated surat rekomendasi PDF
   userId          Int
   pengcabId       Int?

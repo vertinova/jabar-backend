@@ -1,6 +1,37 @@
 const prisma = require('../lib/prisma');
 const { generateSuratRekomendasi } = require('../lib/suratGenerator');
 
+// Helper: convert month number to Roman numeral
+function toRoman(num) {
+  const romans = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
+  return romans[num] || String(num);
+}
+
+// Generate auto nomor surat: UM.001/FORBASI-JABAR/II/2026
+async function generateNomorSurat() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1; // 1-12
+  const romanMonth = toRoman(month);
+
+  // Count approved rekomendasi this year to determine sequence number
+  const startOfYear = new Date(year, 0, 1);
+  const endOfYear = new Date(year + 1, 0, 1);
+
+  const count = await prisma.rekomendasiEvent.count({
+    where: {
+      nomorSurat: { not: null },
+      approvedPengdaAt: {
+        gte: startOfYear,
+        lt: endOfYear,
+      },
+    },
+  });
+
+  const seq = String(count + 1).padStart(3, '0');
+  return `UM.${seq}/FORBASI-JABAR/${romanMonth}/${year}`;
+}
+
 const getAll = async (req, res) => {
   try {
     const { search, status } = req.query;
@@ -225,6 +256,8 @@ const updateStatus = async (req, res) => {
     if (status === 'DISETUJUI') {
       data.approvedPengdaAt = new Date();
       if (catatanAdmin) data.catatanAdmin = catatanAdmin;
+      // Auto-generate nomor surat
+      data.nomorSurat = await generateNomorSurat();
     }
     if (status === 'DITOLAK') {
       if (!catatanAdmin?.trim()) return res.status(400).json({ error: 'Catatan alasan penolakan wajib diisi' });
