@@ -95,7 +95,11 @@ const parseFormData = (req) => {
     try { mataLomba = JSON.parse(mataLombaRaw); } catch { mataLomba = null; }
   }
 
+  // Handle proposal kegiatan file
   const files = req.files || [];
+  const proposalFile = files.find(f => f.fieldname === 'proposalKegiatan');
+  const proposal = proposalFile ? `/uploads/${proposalFile.filename}` : null;
+
   const dokumenSuratFile = files.find(f => f.fieldname === 'dokumenSurat');
   const dokumenSurat = dokumenSuratFile ? `/uploads/${dokumenSuratFile.filename}` : null;
 
@@ -119,9 +123,20 @@ const parseFormData = (req) => {
         }
       }
     }
+
+    // Handle juri foto uploads (juriFoto_0, juriFoto_1, etc.)
+    if (persyaratan.namaJuri && Array.isArray(persyaratan.namaJuri.juriList)) {
+      persyaratan.namaJuri.juriList = persyaratan.namaJuri.juriList.map((juri, idx) => {
+        const fotoFile = files.find(f => f.fieldname === `juriFoto_${idx}`);
+        if (fotoFile) {
+          return { ...juri, foto: `/uploads/${fotoFile.filename}` };
+        }
+        return juri;
+      });
+    }
   }
 
-  return { namaEvent, jenisEvent, tanggalMulai, tanggalSelesai, lokasi, deskripsi, penyelenggara, kontakPerson, noBilingSimpaskor, pengcabId, mataLomba, dokumenSurat, persyaratan, submitAction };
+  return { namaEvent, jenisEvent, tanggalMulai, tanggalSelesai, lokasi, deskripsi, penyelenggara, kontakPerson, noBilingSimpaskor, pengcabId, mataLomba, proposal, dokumenSurat, persyaratan, submitAction };
 };
 
 const create = async (req, res) => {
@@ -154,6 +169,7 @@ const create = async (req, res) => {
         dokumenSurat: parsed.dokumenSurat,
         persyaratan: parsed.persyaratan || undefined,
         mataLomba: parsed.mataLomba || undefined,
+        proposal: parsed.proposal || undefined,
         status: isDraft ? 'DRAFT' : 'PENDING',
         userId: req.user.id,
         pengcabId: finalPengcabId
@@ -217,6 +233,7 @@ const update = async (req, res) => {
     if (parsed.dokumenSurat) data.dokumenSurat = parsed.dokumenSurat;
     if (parsed.persyaratan) data.persyaratan = parsed.persyaratan;
     if (parsed.mataLomba) data.mataLomba = parsed.mataLomba;
+    if (parsed.proposal) data.proposal = parsed.proposal;
 
     // Reset approval fields when resubmitting
     if (!isDraft) {

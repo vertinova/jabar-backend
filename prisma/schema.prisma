@@ -82,6 +82,7 @@ model RekomendasiEvent {
   dokumenSurat    String?
   persyaratan     Json?          // Stores all persyaratan data (checkboxes, text, file paths)
   mataLomba       Json?          // Stores mata lomba selections with individual schedules
+  proposal        String?        // File path for uploaded proposal kegiatan document
   status          StatusApproval @default(DRAFT)
   catatanPengcab  String?        @db.Text
   catatanAdmin    String?        @db.Text
