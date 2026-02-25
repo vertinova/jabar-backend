@@ -55,6 +55,7 @@ async function generateSuratRekomendasi(rekomendasiEvent) {
       // Logo pengda jabar (kop surat)
       const logoCandidates = [
         path.join(__dirname, '..', '..', 'uploads', 'logo-kopsurat.png'),
+        path.join(__dirname, '..', '..', '..', 'frontend', 'public', 'logo-kopsurat.png'),
         path.join(__dirname, '..', '..', 'uploads', 'logo-pengda-jabar.png'),
         path.join(__dirname, '..', '..', '..', 'frontend', 'public', 'logo-pengda-jabar.png'),
         path.join(__dirname, '..', '..', 'uploads', 'LOGO-FORBASI.png'),
@@ -62,12 +63,12 @@ async function generateSuratRekomendasi(rekomendasiEvent) {
       ];
       const actualLogo = logoCandidates.find(p => fs.existsSync(p)) || null;
 
-      const kopTop = 25;
-      const logoW = 130;
-      const logoH = 130;
+      const kopTop = 20;
+      const logoW = 160;
+      const logoH = 100;
 
       if (actualLogo) {
-        doc.image(actualLogo, marginL, kopTop, { width: logoW, height: logoH, fit: [logoW, logoH] });
+        doc.image(actualLogo, marginL, kopTop, { fit: [logoW, logoH] });
       }
 
       // Text block to the right of logo – LEFT aligned like official template
