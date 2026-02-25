@@ -5,6 +5,47 @@ const { fetchForbasiAccounts, fetchForbasiAccount, fixForbasiFileUrl } = require
 let anggotaCache = { data: null, timestamp: 0 };
 const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
 
+// Helper: ensure anggota cache is populated (reused by landing & anggota endpoints)
+const ensureAnggotaCache = async () => {
+  if (anggotaCache.data && Date.now() - anggotaCache.timestamp < CACHE_TTL) {
+    return anggotaCache.data;
+  }
+  try {
+    const accounts = await fetchForbasiAccounts({ per_page: 500 });
+    const BATCH_SIZE = 20;
+    const enriched = [...accounts];
+    for (let i = 0; i < enriched.length; i += BATCH_SIZE) {
+      const batch = enriched.slice(i, i + BATCH_SIZE);
+      const details = await Promise.allSettled(
+        batch.map(a => fetchForbasiAccount(a.username))
+      );
+      details.forEach((result, idx) => {
+        if (result.status === 'fulfilled' && result.value) {
+          const detail = result.value;
+          const kta = (detail.kta || [])[0];
+          enriched[i + idx] = {
+            ...enriched[i + idx],
+            logo_url: fixForbasiFileUrl(enriched[i + idx].logo_url || (kta && kta.logo_url)),
+            school_name: kta?.school_name || detail.school_name || null,
+            coach_name: kta?.coach_name || null,
+            leader_name: kta?.leader_name || null,
+            club_address: kta?.club_address || detail.address || null,
+            kta_status: kta?.status_label || null,
+          };
+        } else {
+          enriched[i + idx].logo_url = fixForbasiFileUrl(enriched[i + idx].logo_url);
+        }
+      });
+    }
+    const result = enriched.filter(m => m.kta_status === 'KTA Terbit');
+    anggotaCache = { data: result, timestamp: Date.now() };
+    return result;
+  } catch (err) {
+    console.error('ensureAnggotaCache error:', err.message);
+    return anggotaCache.data || [];
+  }
+};
+
 const getStats = async (req, res) => {
   try {
     const [totalPengcab, totalRekomendasi, totalKejurda, totalPendaftaran, totalUsers] = await Promise.all([
@@ -139,12 +180,20 @@ const getLandingData = async (req, res) => {
     const config = {};
     siteConfigs.forEach(c => { config[c.key] = c.value; });
 
+    // Get total club terdaftar (members with KTA Terbit) — fetch if cache empty
+    const anggotaData = await ensureAnggotaCache();
+    const totalClub = anggotaData.length;
+
+    // Count unique kota/kabupaten from pengcab list
+    const kotaSet = new Set(pengcabList.map(p => p.kota).filter(Boolean));
+
     res.json({
       stats: {
         totalPengcab: pengcabList.length,
         totalUsers,
+        totalClub,
         totalEvents: mergedEvents.length + approvedEvents.length,
-        kotaKabupaten: 27,
+        kotaKabupaten: kotaSet.size || 27,
       },
       pengcabList,
       kejurdaEvents: mergedEvents,
@@ -165,48 +214,7 @@ const getAnggotaForbasi = async (req, res) => {
   try {
     const { search } = req.query;
 
-    // Return cached data if fresh (skip cache for search queries)
-    if (!search && anggotaCache.data && Date.now() - anggotaCache.timestamp < CACHE_TTL) {
-      return res.json({ success: true, total: anggotaCache.data.length, data: anggotaCache.data });
-    }
-
-    const accounts = await fetchForbasiAccounts({ per_page: 500 });
-
-    // Enrich each account with KTA data (school_name, coach_name) in parallel batches
-    const BATCH_SIZE = 20;
-    const enriched = [...accounts];
-
-    for (let i = 0; i < enriched.length; i += BATCH_SIZE) {
-      const batch = enriched.slice(i, i + BATCH_SIZE);
-      const details = await Promise.allSettled(
-        batch.map(a => fetchForbasiAccount(a.username))
-      );
-      details.forEach((result, idx) => {
-        if (result.status === 'fulfilled' && result.value) {
-          const detail = result.value;
-          const kta = (detail.kta || [])[0]; // Take first (latest) KTA
-          enriched[i + idx] = {
-            ...enriched[i + idx],
-            logo_url: fixForbasiFileUrl(enriched[i + idx].logo_url || (kta && kta.logo_url)),
-            school_name: kta?.school_name || detail.school_name || null,
-            coach_name: kta?.coach_name || null,
-            leader_name: kta?.leader_name || null,
-            club_address: kta?.club_address || detail.address || null,
-            kta_status: kta?.status_label || null,
-          };
-        } else {
-          enriched[i + idx].logo_url = fixForbasiFileUrl(enriched[i + idx].logo_url);
-        }
-      });
-    }
-
-    // Only include members with KTA Terbit (officially registered)
-    let result = enriched.filter(m => m.kta_status === 'KTA Terbit');
-
-    // Cache the FILTERED data (only KTA Terbit members)
-    if (!search) {
-      anggotaCache = { data: result, timestamp: Date.now() };
-    }
+    let result = await ensureAnggotaCache();
 
     // Apply search filter if provided
     if (search) {
