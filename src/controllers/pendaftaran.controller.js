@@ -212,10 +212,18 @@ const uploadPelunasan = async (req, res) => {
 const verifyPelunasan = async (req, res) => {
   try {
     const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: 'ID tidak valid' });
+
     const pendaftaran = await prisma.pendaftaranKejurda.findUnique({ where: { id } });
     if (!pendaftaran) return res.status(404).json({ error: 'Data tidak ditemukan' });
 
     const dp = pendaftaran.dataPersyaratan || {};
+    if (!dp.isBookingDP) {
+      return res.status(400).json({ error: 'Pendaftaran ini bukan DP, tidak perlu verifikasi pelunasan' });
+    }
+    if (dp.statusPembayaran !== 'MENUNGGU_VERIFIKASI') {
+      return res.status(400).json({ error: `Tidak ada pelunasan yang perlu diverifikasi (status: ${dp.statusPembayaran || 'N/A'})` });
+    }
     const updatedDP = {
       ...dp,
       statusPembayaran: 'LUNAS',
@@ -226,7 +234,7 @@ const verifyPelunasan = async (req, res) => {
     const updateData = {
       dataPersyaratan: updatedDP,
       status: 'DISETUJUI',
-      catatanAdmin: req.body.catatan || 'Pelunasan diverifikasi',
+      catatanAdmin: req.body?.catatan || 'Pelunasan diverifikasi',
     };
     if (!pendaftaran.qrToken) {
       updateData.qrToken = randomUUID();

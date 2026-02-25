@@ -1,6 +1,5 @@
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../lib/prisma');
 const bcrypt = require('bcryptjs');
-const prisma = new PrismaClient();
 
 // GET /api/pengcab-panel/dashboard
 const getDashboard = async (req, res) => {
@@ -91,7 +90,7 @@ const getRekomendasi = async (req, res) => {
       mataLomba: i.mataLomba,
       status: i.status,
       catatanPengcab: i.catatanPengcab,
-      user: { name: i.user.name, email: i.user.email },
+      user: { name: i.user?.name || '-', email: i.user?.email || '-' },
       pengcab: { nama: i.pengcab?.nama },
       createdAt: i.createdAt,
     })));
@@ -179,7 +178,7 @@ const getPendaftaran = async (req, res) => {
       dokumen: i.dokumen,
       status: i.status,
       kejurda: i.kejurda,
-      user: { namaLengkap: i.user.name },
+      user: { namaLengkap: i.user?.name || '-' },
       pengcab: { nama: i.pengcab?.nama },
       createdAt: i.createdAt,
     })));

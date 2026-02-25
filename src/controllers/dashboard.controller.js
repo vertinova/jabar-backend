@@ -34,7 +34,7 @@ const getStats = async (req, res) => {
       }
     });
 
-    const recentPendaftaran = await prisma.pendaftaranKejurda.findMany({
+    const recentPendaftaranRaw = await prisma.pendaftaranKejurda.findMany({
       take: 5,
       orderBy: { createdAt: 'desc' },
       include: {
@@ -42,6 +42,10 @@ const getStats = async (req, res) => {
         kejurda: { select: { namaKejurda: true } }
       }
     });
+    const recentPendaftaran = recentPendaftaranRaw.map(p => ({
+      ...p,
+      user: p.user || { name: '-' },
+    }));
 
     res.json({
       stats: { totalPengcab, totalRekomendasi, totalKejurda, totalPendaftaran, totalUsers },
