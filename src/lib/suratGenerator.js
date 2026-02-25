@@ -52,8 +52,9 @@ async function generateSuratRekomendasi(rekomendasiEvent) {
       // ════════════════════════════════════════════
       //  KOP SURAT – persis template resmi Pengda Jabar
       // ════════════════════════════════════════════
-      // Logo pengda jabar
+      // Logo pengda jabar (kop surat)
       const logoCandidates = [
+        path.join(__dirname, '..', '..', 'uploads', 'logo-kopsurat.png'),
         path.join(__dirname, '..', '..', 'uploads', 'logo-pengda-jabar.png'),
         path.join(__dirname, '..', '..', '..', 'frontend', 'public', 'logo-pengda-jabar.png'),
         path.join(__dirname, '..', '..', 'uploads', 'LOGO-FORBASI.png'),
