@@ -144,6 +144,10 @@ model Kejurda {
   batasPendaftaran DateTime?
   kontakPerson   String?
   kontakPhone    String?
+  noBilingSimpaskor String?
+  persyaratan    Json?
+  mataLomba      Json?
+  proposal       String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

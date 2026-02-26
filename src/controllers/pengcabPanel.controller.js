@@ -303,9 +303,32 @@ async function createKejurcab(req, res) {
     const user = await prisma.user.findUnique({ where: { id: req.user.id }, include: { pengcab: true } });
     if (!user?.pengcabId) return res.status(400).json({ error: 'Pengcab tidak ditemukan' });
 
-    const { namaKejurda, tanggalMulai, tanggalSelesai, lokasi, deskripsi } = req.body;
+    const { namaKejurda, tanggalMulai, tanggalSelesai, lokasi, deskripsi, noBilingSimpaskor } = req.body;
     if (!namaKejurda || !tanggalMulai || !tanggalSelesai || !lokasi) {
       return res.status(400).json({ error: 'Nama, tanggal mulai, tanggal selesai, dan lokasi wajib diisi' });
+    }
+
+    // Billing Simpaskor wajib untuk Kejurcab
+    if (!noBilingSimpaskor || !noBilingSimpaskor.trim()) {
+      return res.status(400).json({ error: 'Nomor billing Simpaskor wajib diisi untuk mengajukan Kejurcab' });
+    }
+
+    // Verify billing against Simpaskor API
+    const SIMPASKOR_API_URL = process.env.SIMPASKOR_API_URL || 'https://simpaskor.id/api/external';
+    const SIMPASKOR_API_KEY = process.env.SIMPASKOR_API_KEY || 'SIMPASKOR_API_KEY_2026';
+    try {
+      const verifyUrl = `${SIMPASKOR_API_URL}/booking_detail.php?api_key=${encodeURIComponent(SIMPASKOR_API_KEY)}&billing_id=${encodeURIComponent(noBilingSimpaskor.trim())}`;
+      const verifyResp = await fetch(verifyUrl, { method: 'GET', headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(10000) });
+      const verifyData = await verifyResp.json();
+      if (!verifyData.success || !verifyData.data) {
+        return res.status(400).json({ error: 'Kode billing Simpaskor tidak valid. Pastikan nomor billing sudah benar dan terdaftar.' });
+      }
+      const paymentStatus = verifyData.data.payment?.status;
+      if (!paymentStatus || paymentStatus.toLowerCase() !== 'lunas') {
+        return res.status(400).json({ error: `Pembayaran billing Simpaskor belum lunas (status: ${paymentStatus || 'tidak diketahui'}). Lunasi terlebih dahulu.` });
+      }
+    } catch (verifyErr) {
+      return res.status(502).json({ error: 'Gagal memverifikasi billing Simpaskor. Silakan coba lagi.' });
     }
 
     // Validate: max 1 KEJURCAB per pengcab per year
@@ -326,6 +349,48 @@ async function createKejurcab(req, res) {
       });
     }
 
+    // Parse files
+    const files = req.files || [];
+    const proposalFile = files.find(f => f.fieldname === 'proposalKegiatan');
+    const proposal = proposalFile ? `/uploads/${proposalFile.filename}` : null;
+
+    // Parse mataLomba JSON
+    let mataLomba = null;
+    if (req.body.mataLomba) {
+      try { mataLomba = JSON.parse(req.body.mataLomba); } catch { mataLomba = {}; }
+    }
+
+    // Parse persyaratan JSON + file uploads
+    let persyaratan = null;
+    if (req.body.persyaratan) {
+      try { persyaratan = JSON.parse(req.body.persyaratan); } catch { persyaratan = {}; }
+      const fileFields = [
+        'suratIzinSekolah', 'suratIzinKepolisian', 'suratRekomendasiDinas',
+        'suratIzinVenue', 'suratRekomendasiPPI',
+        'fotoLapangan', 'fotoTempatIbadah', 'fotoBarak', 'fotoAreaParkir',
+        'fotoRuangKesehatan', 'fotoMCK', 'fotoTempatSampah', 'fotoRuangKomisi',
+        'faktaIntegritasKomisi', 'faktaIntegritasHonor', 'faktaIntegritasPanitia',
+        'desainSertifikat'
+      ];
+      for (const field of fileFields) {
+        const uploadedFile = files.find(f => f.fieldname === field);
+        if (uploadedFile) {
+          if (!persyaratan[field]) persyaratan[field] = {};
+          if (typeof persyaratan[field] === 'object') {
+            persyaratan[field].file = `/uploads/${uploadedFile.filename}`;
+          }
+        }
+      }
+      // Handle juri foto uploads
+      if (persyaratan.namaJuri && Array.isArray(persyaratan.namaJuri.juriList)) {
+        persyaratan.namaJuri.juriList = persyaratan.namaJuri.juriList.map((juri, idx) => {
+          const fotoFile = files.find(f => f.fieldname === `juriFoto_${idx}`);
+          if (fotoFile) return { ...juri, foto: `/uploads/${fotoFile.filename}` };
+          return juri;
+        });
+      }
+    }
+
     const kejurcab = await prisma.kejurda.create({
       data: {
         namaKejurda,
@@ -334,9 +399,13 @@ async function createKejurcab(req, res) {
         tanggalSelesai: new Date(tanggalSelesai),
         lokasi,
         deskripsi: deskripsi || null,
+        noBilingSimpaskor: noBilingSimpaskor.trim(),
+        persyaratan: persyaratan || undefined,
+        mataLomba: mataLomba || undefined,
+        proposal: proposal || undefined,
         pengcabId: user.pengcabId,
         statusApproval: 'PENDING',
-        statusBuka: false, // will be opened after admin approval
+        statusBuka: false,
       }
     });
 
