@@ -5,6 +5,9 @@ const { fetchForbasiAccounts, fetchForbasiAccount, fixForbasiFileUrl } = require
 // Cache invalidates when total count from API changes (new member detected)
 let anggotaCache = { data: null, lastTotal: 0 };
 
+// Current year for KTA filter (only show KTA issued in current year)
+const CURRENT_YEAR = new Date().getFullYear().toString(); // "2026"
+
 // Helper: ensure anggota cache is populated
 // Auto-refresh when new member detected (total count changed from API)
 const ensureAnggotaCache = async (forceRefresh = false) => {
@@ -33,11 +36,22 @@ const ensureAnggotaCache = async (forceRefresh = false) => {
         const account = batch[idx];
         if (result.status === 'fulfilled' && result.value) {
           const detail = result.value;
-          // Only get first KTA that has status 'KTA Terbit'
+          // Find KTA that:
+          // 1. Has status 'KTA Terbit'
+          // 2. Issued in current year (2026)
+          // 3. Province is 'Jawa Barat'
           const ktaList = detail.kta || [];
-          const validKta = ktaList.find(k => k && k.status_label === 'KTA Terbit');
+          const validKta = ktaList.find(k => {
+            if (!k || k.status_label !== 'KTA Terbit') return false;
+            // Check year from kta_issued_at (format: "2026-02-21 08:44:48")
+            const issuedYear = k.kta_issued_at ? k.kta_issued_at.substring(0, 4) : null;
+            if (issuedYear !== CURRENT_YEAR) return false;
+            // Check province
+            if (k.province !== 'Jawa Barat') return false;
+            return true;
+          });
           
-          // Only add if has valid KTA Terbit
+          // Only add if has valid KTA Terbit for current year
           if (validKta) {
             enriched.push({
               ...account,
@@ -48,6 +62,7 @@ const ensureAnggotaCache = async (forceRefresh = false) => {
               club_address: validKta.club_address || detail.address || null,
               kta_status: validKta.status_label,
               kta_number: validKta.kta_number || null,
+              kta_issued_at: validKta.kta_issued_at || null,
             });
           }
         }
@@ -56,7 +71,7 @@ const ensureAnggotaCache = async (forceRefresh = false) => {
     
     // Store result and total count for change detection
     anggotaCache = { data: enriched, lastTotal: accounts.length };
-    console.log(`Anggota cache refreshed: ${enriched.length} with KTA Terbit out of ${accounts.length} total accounts`);
+    console.log(`Anggota cache refreshed: ${enriched.length} with KTA Terbit ${CURRENT_YEAR} out of ${accounts.length} total accounts`);
     return enriched;
   } catch (err) {
     console.error('ensureAnggotaCache error:', err.message);

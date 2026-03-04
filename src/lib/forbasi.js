@@ -74,19 +74,38 @@ async function verifyForbasiLogin(username, password) {
 
 /**
  * Fetch all accounts from FORBASI API (v3.0)
+ * Fetches ALL pages to get complete data
  * @param {Object} options - { role, search, page, per_page }
  */
 async function fetchForbasiAccounts(options = {}) {
-  const params = new URLSearchParams({ action: 'accounts', api_key: FORBASI_API_KEY });
-  if (options.role) params.append('role', options.role);
-  if (options.search) params.append('search', options.search);
-  if (options.page) params.append('page', options.page);
-  if (options.per_page) params.append('per_page', options.per_page);
+  const allAccounts = [];
+  let page = 1;
+  let hasMore = true;
+  
+  while (hasMore) {
+    const params = new URLSearchParams({ action: 'accounts', api_key: FORBASI_API_KEY });
+    if (options.role) params.append('role', options.role);
+    if (options.search) params.append('search', options.search);
+    params.append('page', page);
+    params.append('per_page', options.per_page || 200);
 
-  const response = await fetch(`${FORBASI_API_URL}?${params}`);
-  const result = await response.json().catch(() => null);
-  if (!result || !result.success) return [];
-  return result.data || [];
+    const response = await fetch(`${FORBASI_API_URL}?${params}`);
+    const result = await response.json().catch(() => null);
+    
+    if (!result || !result.success || !result.data || result.data.length === 0) {
+      hasMore = false;
+    } else {
+      allAccounts.push(...result.data);
+      // Check if we got less than per_page (last page) or reached total
+      if (result.data.length < (options.per_page || 200)) {
+        hasMore = false;
+      } else {
+        page++;
+      }
+    }
+  }
+  
+  return allAccounts;
 }
 
 /**
