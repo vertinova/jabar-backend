@@ -27,7 +27,17 @@ router.put('/rekomendasi/:id/reject', ctrl.rejectRekomendasi);
 router.get('/pendaftaran', ctrl.getPendaftaran);
 router.get('/anggota', ctrl.getAnggota);
 router.put('/anggota/:id', ctrl.updateAnggota);
+
+// Kejurcab management
 router.get('/kejurcab', ctrl.getKejurcab);
 router.post('/kejurcab', handleUpload, ctrl.createKejurcab);
+router.get('/kejurcab/:id', ctrl.getKejurcabById);
+router.put('/kejurcab/:id', handleUpload, ctrl.updateKejurcab);
+router.patch('/kejurcab/:id/toggle-registration', ctrl.toggleKejurcabRegistration);
+router.get('/kejurcab/:id/pendaftaran', ctrl.getKejurcabPendaftaran);
+
+// Pendaftaran management for pengcab's kejurcab
+router.patch('/pendaftaran/:id/approve', ctrl.approvePendaftaran);
+router.patch('/pendaftaran/:id/reject', ctrl.rejectPendaftaran);
 
 module.exports = router;

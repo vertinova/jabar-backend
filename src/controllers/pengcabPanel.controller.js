@@ -276,6 +276,12 @@ module.exports = {
   updateAnggota,
   getKejurcab,
   createKejurcab,
+  getKejurcabById,
+  updateKejurcab,
+  toggleKejurcabRegistration,
+  getKejurcabPendaftaran,
+  approvePendaftaran,
+  rejectPendaftaran,
 };
 
 // GET /api/pengcab-panel/kejurcab
@@ -413,5 +419,210 @@ async function createKejurcab(req, res) {
   } catch (error) {
     console.error('Create kejurcab error:', error);
     res.status(500).json({ error: 'Gagal mengajukan kejurcab', detail: error.message });
+  }
+}
+
+// GET /api/pengcab-panel/kejurcab/:id
+async function getKejurcabById(req, res) {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!user?.pengcabId) return res.status(400).json({ error: 'Pengcab tidak ditemukan' });
+
+    const item = await prisma.kejurda.findUnique({
+      where: { id: parseInt(req.params.id) },
+      include: {
+        _count: { select: { pendaftaran: true } },
+        pendaftaran: {
+          include: {
+            user: { select: { id: true, name: true, email: true, phone: true } },
+            pengcab: { select: { id: true, nama: true, kota: true } }
+          },
+          orderBy: { createdAt: 'desc' }
+        }
+      }
+    });
+
+    if (!item) return res.status(404).json({ error: 'Kejurcab tidak ditemukan' });
+    if (item.pengcabId !== user.pengcabId) return res.status(403).json({ error: 'Akses ditolak' });
+
+    res.json(item);
+  } catch (error) {
+    console.error('Get kejurcab by id error:', error);
+    res.status(500).json({ error: 'Gagal memuat data kejurcab', detail: error.message });
+  }
+}
+
+// PUT /api/pengcab-panel/kejurcab/:id
+async function updateKejurcab(req, res) {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!user?.pengcabId) return res.status(400).json({ error: 'Pengcab tidak ditemukan' });
+
+    const item = await prisma.kejurda.findUnique({ where: { id: parseInt(req.params.id) } });
+    if (!item) return res.status(404).json({ error: 'Kejurcab tidak ditemukan' });
+    if (item.pengcabId !== user.pengcabId) return res.status(403).json({ error: 'Akses ditolak' });
+
+    // Only allow update if still PENDING
+    if (item.statusApproval !== 'PENDING') {
+      return res.status(400).json({ error: 'Hanya kejurcab dengan status PENDING yang dapat diubah' });
+    }
+
+    const { namaKejurda, tanggalMulai, tanggalSelesai, lokasi, deskripsi } = req.body;
+    const data = {};
+    if (namaKejurda) data.namaKejurda = namaKejurda;
+    if (tanggalMulai) data.tanggalMulai = new Date(tanggalMulai);
+    if (tanggalSelesai) data.tanggalSelesai = new Date(tanggalSelesai);
+    if (lokasi) data.lokasi = lokasi;
+    if (deskripsi !== undefined) data.deskripsi = deskripsi;
+
+    // Handle poster upload
+    const files = req.files || [];
+    const posterFile = files.find(f => f.fieldname === 'poster');
+    if (posterFile) data.poster = `/uploads/${posterFile.filename}`;
+
+    const updated = await prisma.kejurda.update({
+      where: { id: item.id },
+      data
+    });
+
+    res.json({ message: 'Kejurcab berhasil diupdate', kejurcab: updated });
+  } catch (error) {
+    console.error('Update kejurcab error:', error);
+    res.status(500).json({ error: 'Gagal update kejurcab', detail: error.message });
+  }
+}
+
+// PATCH /api/pengcab-panel/kejurcab/:id/toggle-registration
+async function toggleKejurcabRegistration(req, res) {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!user?.pengcabId) return res.status(400).json({ error: 'Pengcab tidak ditemukan' });
+
+    const item = await prisma.kejurda.findUnique({ where: { id: parseInt(req.params.id) } });
+    if (!item) return res.status(404).json({ error: 'Kejurcab tidak ditemukan' });
+    if (item.pengcabId !== user.pengcabId) return res.status(403).json({ error: 'Akses ditolak' });
+
+    // Only allow toggle if approved
+    if (item.statusApproval !== 'DISETUJUI') {
+      return res.status(400).json({ error: 'Hanya kejurcab yang sudah disetujui yang dapat dibuka/tutup pendaftarannya' });
+    }
+
+    const updated = await prisma.kejurda.update({
+      where: { id: item.id },
+      data: { statusBuka: !item.statusBuka }
+    });
+
+    res.json({
+      message: `Pendaftaran ${updated.statusBuka ? 'dibuka' : 'ditutup'}`,
+      kejurcab: updated
+    });
+  } catch (error) {
+    console.error('Toggle kejurcab registration error:', error);
+    res.status(500).json({ error: 'Gagal mengubah status pendaftaran', detail: error.message });
+  }
+}
+
+// GET /api/pengcab-panel/kejurcab/:id/pendaftaran
+async function getKejurcabPendaftaran(req, res) {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!user?.pengcabId) return res.status(400).json({ error: 'Pengcab tidak ditemukan' });
+
+    const kejurcab = await prisma.kejurda.findUnique({ where: { id: parseInt(req.params.id) } });
+    if (!kejurcab) return res.status(404).json({ error: 'Kejurcab tidak ditemukan' });
+    if (kejurcab.pengcabId !== user.pengcabId) return res.status(403).json({ error: 'Akses ditolak' });
+
+    const items = await prisma.pendaftaranKejurda.findMany({
+      where: { kejurdaId: parseInt(req.params.id) },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        user: { select: { id: true, name: true, email: true, phone: true } },
+        pengcab: { select: { id: true, nama: true, kota: true } }
+      }
+    });
+
+    res.json(items);
+  } catch (error) {
+    console.error('Get kejurcab pendaftaran error:', error);
+    res.status(500).json({ error: 'Gagal memuat pendaftaran', detail: error.message });
+  }
+}
+
+// PATCH /api/pengcab-panel/pendaftaran/:id/approve
+async function approvePendaftaran(req, res) {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!user?.pengcabId) return res.status(400).json({ error: 'Pengcab tidak ditemukan' });
+
+    const pendaftaran = await prisma.pendaftaranKejurda.findUnique({
+      where: { id: parseInt(req.params.id) },
+      include: { kejurda: true }
+    });
+
+    if (!pendaftaran) return res.status(404).json({ error: 'Pendaftaran tidak ditemukan' });
+
+    // Check if kejurda belongs to this pengcab
+    if (pendaftaran.kejurda?.pengcabId !== user.pengcabId) {
+      return res.status(403).json({ error: 'Akses ditolak. Pendaftaran ini bukan untuk kejurcab Anda.' });
+    }
+
+    if (pendaftaran.status !== 'PENDING') {
+      return res.status(400).json({ error: 'Hanya pendaftaran dengan status PENDING yang dapat disetujui' });
+    }
+
+    const updated = await prisma.pendaftaranKejurda.update({
+      where: { id: pendaftaran.id },
+      data: {
+        status: 'DISETUJUI',
+        approvedAt: new Date()
+      }
+    });
+
+    res.json({ message: 'Pendaftaran berhasil disetujui', pendaftaran: updated });
+  } catch (error) {
+    console.error('Approve pendaftaran error:', error);
+    res.status(500).json({ error: 'Gagal menyetujui pendaftaran', detail: error.message });
+  }
+}
+
+// PATCH /api/pengcab-panel/pendaftaran/:id/reject
+async function rejectPendaftaran(req, res) {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+    if (!user?.pengcabId) return res.status(400).json({ error: 'Pengcab tidak ditemukan' });
+
+    const pendaftaran = await prisma.pendaftaranKejurda.findUnique({
+      where: { id: parseInt(req.params.id) },
+      include: { kejurda: true }
+    });
+
+    if (!pendaftaran) return res.status(404).json({ error: 'Pendaftaran tidak ditemukan' });
+
+    // Check if kejurda belongs to this pengcab
+    if (pendaftaran.kejurda?.pengcabId !== user.pengcabId) {
+      return res.status(403).json({ error: 'Akses ditolak. Pendaftaran ini bukan untuk kejurcab Anda.' });
+    }
+
+    if (pendaftaran.status !== 'PENDING') {
+      return res.status(400).json({ error: 'Hanya pendaftaran dengan status PENDING yang dapat ditolak' });
+    }
+
+    const catatan = req.body?.catatan?.trim();
+    if (!catatan) {
+      return res.status(400).json({ error: 'Alasan penolakan wajib diisi' });
+    }
+
+    const updated = await prisma.pendaftaranKejurda.update({
+      where: { id: pendaftaran.id },
+      data: {
+        status: 'DITOLAK',
+        catatan: catatan
+      }
+    });
+
+    res.json({ message: 'Pendaftaran ditolak', pendaftaran: updated });
+  } catch (error) {
+    console.error('Reject pendaftaran error:', error);
+    res.status(500).json({ error: 'Gagal menolak pendaftaran', detail: error.message });
   }
 }
