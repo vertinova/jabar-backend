@@ -1,17 +1,25 @@
 const prisma = require('../lib/prisma');
 const { fetchForbasiAccounts, fetchForbasiAccount, fixForbasiFileUrl } = require('../lib/forbasi');
 
-// ── Simple in-memory cache for enriched anggota data ──
-let anggotaCache = { data: null, timestamp: 0 };
-const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+// ── Smart cache for enriched anggota data ──
+// Cache invalidates when total count from API changes (new member detected)
+let anggotaCache = { data: null, lastTotal: 0 };
 
-// Helper: ensure anggota cache is populated (reused by landing & anggota endpoints)
-const ensureAnggotaCache = async () => {
-  if (anggotaCache.data && Date.now() - anggotaCache.timestamp < CACHE_TTL) {
-    return anggotaCache.data;
-  }
+// Helper: ensure anggota cache is populated
+// Auto-refresh when new member detected (total count changed from API)
+const ensureAnggotaCache = async (forceRefresh = false) => {
   try {
+    // Fetch all accounts from API (single call)
     const accounts = await fetchForbasiAccounts({ per_page: 500 });
+    const currentTotal = accounts.length;
+    const hasNewData = currentTotal !== anggotaCache.lastTotal;
+    
+    // Use cache if valid and no new data detected
+    if (!forceRefresh && anggotaCache.data && !hasNewData) {
+      return anggotaCache.data;
+    }
+    
+    // New data detected or force refresh - enrich the accounts
     const BATCH_SIZE = 20;
     const enriched = [...accounts];
     for (let i = 0; i < enriched.length; i += BATCH_SIZE) {
@@ -38,7 +46,8 @@ const ensureAnggotaCache = async () => {
       });
     }
     const result = enriched.filter(m => m.kta_status === 'KTA Terbit');
-    anggotaCache = { data: result, timestamp: Date.now() };
+    // Store result and total count for change detection
+    anggotaCache = { data: result, lastTotal: accounts.length };
     return result;
   } catch (err) {
     console.error('ensureAnggotaCache error:', err.message);
@@ -210,6 +219,7 @@ const getLandingData = async (req, res) => {
 };
 
 // ── PUBLIC Anggota FORBASI Data (no auth) ──
+// Auto-refreshes when new member detected (total count change)
 const getAnggotaForbasi = async (req, res) => {
   try {
     const { search } = req.query;
@@ -234,4 +244,10 @@ const getAnggotaForbasi = async (req, res) => {
   }
 };
 
-module.exports = { getStats, getLandingData, getAnggotaForbasi };
+// ── Clear anggota cache (admin only) ──
+const clearAnggotaCache = async (req, res) => {
+  anggotaCache = { data: null, lastTotal: 0 };
+  res.json({ success: true, message: 'Cache anggota berhasil di-refresh' });
+};
+
+module.exports = { getStats, getLandingData, getAnggotaForbasi, clearAnggotaCache };
