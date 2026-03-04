@@ -12,8 +12,8 @@ const CURRENT_YEAR = new Date().getFullYear().toString(); // "2026"
 // Auto-refresh when new member detected (total count changed from API)
 const ensureAnggotaCache = async (forceRefresh = false) => {
   try {
-    // Fetch all accounts from API (single call)
-    const accounts = await fetchForbasiAccounts({ per_page: 500 });
+    // Fetch all USER accounts from API (with pagination)
+    const accounts = await fetchForbasiAccounts({ role: 'user', per_page: 200 });
     const currentTotal = accounts.length;
     const hasNewData = currentTotal !== anggotaCache.lastTotal;
     
