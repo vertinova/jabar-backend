@@ -21,34 +21,43 @@ const ensureAnggotaCache = async (forceRefresh = false) => {
     
     // New data detected or force refresh - enrich the accounts
     const BATCH_SIZE = 20;
-    const enriched = [...accounts];
-    for (let i = 0; i < enriched.length; i += BATCH_SIZE) {
-      const batch = enriched.slice(i, i + BATCH_SIZE);
+    const enriched = [];
+    
+    for (let i = 0; i < accounts.length; i += BATCH_SIZE) {
+      const batch = accounts.slice(i, i + BATCH_SIZE);
       const details = await Promise.allSettled(
         batch.map(a => fetchForbasiAccount(a.username))
       );
+      
       details.forEach((result, idx) => {
+        const account = batch[idx];
         if (result.status === 'fulfilled' && result.value) {
           const detail = result.value;
-          const kta = (detail.kta || [])[0];
-          enriched[i + idx] = {
-            ...enriched[i + idx],
-            logo_url: fixForbasiFileUrl(enriched[i + idx].logo_url || (kta && kta.logo_url)),
-            school_name: kta?.school_name || detail.school_name || null,
-            coach_name: kta?.coach_name || null,
-            leader_name: kta?.leader_name || null,
-            club_address: kta?.club_address || detail.address || null,
-            kta_status: kta?.status_label || null,
-          };
-        } else {
-          enriched[i + idx].logo_url = fixForbasiFileUrl(enriched[i + idx].logo_url);
+          // Only get first KTA that has status 'KTA Terbit'
+          const ktaList = detail.kta || [];
+          const validKta = ktaList.find(k => k && k.status_label === 'KTA Terbit');
+          
+          // Only add if has valid KTA Terbit
+          if (validKta) {
+            enriched.push({
+              ...account,
+              logo_url: fixForbasiFileUrl(account.logo_url || validKta.logo_url),
+              school_name: validKta.school_name || detail.school_name || null,
+              coach_name: validKta.coach_name || null,
+              leader_name: validKta.leader_name || null,
+              club_address: validKta.club_address || detail.address || null,
+              kta_status: validKta.status_label,
+              kta_number: validKta.kta_number || null,
+            });
+          }
         }
       });
     }
-    const result = enriched.filter(m => m.kta_status === 'KTA Terbit');
+    
     // Store result and total count for change detection
-    anggotaCache = { data: result, lastTotal: accounts.length };
-    return result;
+    anggotaCache = { data: enriched, lastTotal: accounts.length };
+    console.log(`Anggota cache refreshed: ${enriched.length} with KTA Terbit out of ${accounts.length} total accounts`);
+    return enriched;
   } catch (err) {
     console.error('ensureAnggotaCache error:', err.message);
     return anggotaCache.data || [];
