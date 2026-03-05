@@ -359,6 +359,8 @@ async function createKejurcab(req, res) {
     const files = req.files || [];
     const proposalFile = files.find(f => f.fieldname === 'proposalKegiatan');
     const proposal = proposalFile ? `/uploads/${proposalFile.filename}` : null;
+    const posterFile = files.find(f => f.fieldname === 'poster');
+    const poster = posterFile ? `/uploads/${posterFile.filename}` : null;
 
     // Parse mataLomba JSON
     let mataLomba = null;
@@ -409,6 +411,7 @@ async function createKejurcab(req, res) {
         persyaratan: persyaratan || undefined,
         mataLomba: mataLomba || undefined,
         proposal: proposal || undefined,
+        poster: poster || null,
         pengcabId: user.pengcabId,
         statusApproval: 'PENDING',
         statusBuka: false,

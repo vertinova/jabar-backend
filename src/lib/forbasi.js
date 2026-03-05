@@ -49,7 +49,7 @@ async function fetchPengcabDetail(username) {
 
 /**
  * Verify login credentials against FORBASI API (v3.0)
- * Returns user data if login is successful, null if failed
+ * Returns user data if login is successful, throws error with message if failed
  */
 async function verifyForbasiLogin(username, password) {
   const url = `${FORBASI_API_URL}?action=login`;
@@ -66,10 +66,11 @@ async function verifyForbasiLogin(username, password) {
   // API may return non-200 for invalid credentials
   const result = await response.json().catch(() => null);
   if (!result || !result.success) {
-    return null; // Login failed
+    // Return error info if available
+    return { success: false, error: result?.error || 'Login gagal' };
   }
 
-  return result.user || result.data || null;
+  return { success: true, user: result.user || result.data || null };
 }
 
 /**

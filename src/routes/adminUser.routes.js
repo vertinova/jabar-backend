@@ -7,6 +7,7 @@ router.use(authenticate, isAdmin);
 
 // Stats & FORBASI routes (must be before /:id to avoid conflict)
 router.get('/stats', ctrl.getUserStats);
+router.get('/anggota-kta', ctrl.getAnggotaKta);
 router.get('/forbasi-accounts', ctrl.getForbasiAccounts);
 router.get('/forbasi-accounts/:id', ctrl.getForbasiAccountDetail);
 router.post('/forbasi-reset-password', ctrl.resetForbasiPassword);

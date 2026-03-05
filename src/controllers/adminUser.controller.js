@@ -2,6 +2,14 @@ const bcrypt = require('bcryptjs');
 const prisma = require('../lib/prisma');
 const { fetchForbasiAccounts, fetchForbasiAccount, changeForbasiPassword, FORBASI_API_URL, FORBASI_API_KEY } = require('../lib/forbasi');
 
+// ── Cache for anggota KTA data ──
+let anggotaKtaCache = { 
+  data: null, 
+  lastTotal: 0, 
+  lastFetch: 0,
+  CACHE_TTL: 5 * 60 * 1000 // 5 minutes
+};
+
 // GET /api/admin-users — list all users (pengda level, all regions)
 const getAllUsers = async (req, res) => {
   try {
@@ -174,7 +182,149 @@ const resetForbasiPassword = async (req, res) => {
   }
 };
 
-// GET /api/admin-users/stats — summary statistics
+// Helper: fetch and cache all anggota KTA data
+const ensureAnggotaKtaCache = async (forceRefresh = false) => {
+  const now = Date.now();
+  const cacheValid = anggotaKtaCache.data && (now - anggotaKtaCache.lastFetch) < anggotaKtaCache.CACHE_TTL;
+  
+  if (!forceRefresh && cacheValid) {
+    return anggotaKtaCache.data;
+  }
+  
+  console.log('Fetching anggota KTA data from FORBASI API...');
+  const startTime = Date.now();
+  
+  // Fetch all USER accounts from FORBASI API
+  const accounts = await fetchForbasiAccounts({ role: 'user', per_page: 200 });
+  
+  // Check if total changed (new member)
+  if (!forceRefresh && anggotaKtaCache.data && accounts.length === anggotaKtaCache.lastTotal) {
+    // Just refresh timestamp, use existing data
+    anggotaKtaCache.lastFetch = now;
+    return anggotaKtaCache.data;
+  }
+  
+  // Enrich with KTA data
+  const BATCH_SIZE = 30; // Increased batch size for faster processing
+  const allMembers = [];
+  const targetYear = new Date().getFullYear().toString();
+
+  for (let i = 0; i < accounts.length; i += BATCH_SIZE) {
+    const batch = accounts.slice(i, i + BATCH_SIZE);
+    const details = await Promise.allSettled(
+      batch.map(a => fetchForbasiAccount(a.username))
+    );
+
+    details.forEach((result, idx) => {
+      const account = batch[idx];
+      if (result.status === 'fulfilled' && result.value) {
+        const detail = result.value;
+        const ktaList = detail.kta || [];
+        
+        // Debug: log first KTA structure
+        if (ktaList.length > 0 && idx === 0) {
+          console.log('Sample KTA structure:', JSON.stringify(ktaList[0], null, 2));
+        }
+        
+        // Find best KTA (prefer current year KTA Terbit, then latest)
+        let activeKta = null;
+        let latestKta = null;
+        
+        for (const k of ktaList) {
+          if (!k || k.province !== 'Jawa Barat') continue;
+          
+          // Track active KTA (current year)
+          if (k.status_label === 'KTA Terbit') {
+            const issuedYear = k.kta_issued_at ? k.kta_issued_at.substring(0, 4) : null;
+            if (issuedYear === targetYear) {
+              activeKta = k;
+            }
+          }
+          
+          // Track latest KTA
+          if (!latestKta || (k.kta_issued_at && k.kta_issued_at > (latestKta.kta_issued_at || ''))) {
+            latestKta = k;
+          }
+        }
+        
+        const validKta = activeKta || latestKta;
+        
+        allMembers.push({
+          id: account.id,
+          username: account.username,
+          club_name: account.club_name || detail.club_name || '-',
+          city_name: account.city_name || detail.city_name || '-',
+          email: account.email || detail.email || '-',
+          phone: account.phone || detail.phone || '-',
+          school_name: validKta?.school_name || detail.school_name || '-',
+          coach_name: validKta?.coach_name || '-',
+          leader_name: validKta?.leader_name || '-',
+          club_address: validKta?.club_address || detail.address || '-',
+          kta_status: validKta?.status_label || '-',
+          kta_number: validKta?.kta_id || '-',
+          kta_issued_at: validKta?.kta_issued_at || '-',
+          total_kta: ktaList.length,
+          is_active: !!activeKta,
+        });
+      }
+    });
+  }
+  
+  // Update cache
+  anggotaKtaCache = {
+    data: allMembers,
+    lastTotal: accounts.length,
+    lastFetch: Date.now(),
+    CACHE_TTL: 5 * 60 * 1000
+  };
+  
+  console.log(`Anggota KTA cache refreshed: ${allMembers.length} members in ${Date.now() - startTime}ms`);
+  return allMembers;
+};
+
+// GET /api/admin-users/anggota-kta — fetch all anggota with KTA data (for admin export)
+const getAnggotaKta = async (req, res) => {
+  try {
+    const { search, ktaStatus, refresh } = req.query;
+    const targetYear = new Date().getFullYear().toString();
+
+    // Get cached data (or fetch if needed)
+    const allMembers = await ensureAnggotaKtaCache(refresh === 'true');
+    
+    // Apply filters
+    let result = allMembers;
+    
+    // Filter by KTA status
+    if (ktaStatus === 'AKTIF') {
+      result = result.filter(m => m.is_active);
+    }
+
+    // Apply search filter
+    if (search) {
+      const q = search.toLowerCase();
+      result = result.filter(m =>
+        m.club_name.toLowerCase().includes(q) ||
+        m.city_name.toLowerCase().includes(q) ||
+        m.school_name.toLowerCase().includes(q) ||
+        m.coach_name.toLowerCase().includes(q) ||
+        m.username.toLowerCase().includes(q)
+      );
+    }
+
+    res.json({ 
+      success: true, 
+      total: result.length, 
+      year: targetYear, 
+      cached: !req.query.refresh,
+      cacheAge: anggotaKtaCache.lastFetch ? Math.round((Date.now() - anggotaKtaCache.lastFetch) / 1000) : 0,
+      data: result 
+    });
+  } catch (error) {
+    console.error('Fetch anggota KTA error:', error);
+    res.status(500).json({ error: 'Gagal mengambil data anggota KTA', detail: error.message });
+  }
+};
+
 const getUserStats = async (req, res) => {
   try {
     const [totalUsers, byRole, byPengcab] = await Promise.all([
@@ -208,4 +358,4 @@ const getUserStats = async (req, res) => {
   }
 };
 
-module.exports = { getAllUsers, getUserById, updateUser, getForbasiAccounts, getForbasiAccountDetail, resetForbasiPassword, getUserStats };
+module.exports = { getAllUsers, getUserById, updateUser, getForbasiAccounts, getForbasiAccountDetail, resetForbasiPassword, getUserStats, getAnggotaKta };

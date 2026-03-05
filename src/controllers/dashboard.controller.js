@@ -61,7 +61,7 @@ const ensureAnggotaCache = async (forceRefresh = false) => {
               leader_name: validKta.leader_name || null,
               club_address: validKta.club_address || detail.address || null,
               kta_status: validKta.status_label,
-              kta_number: validKta.kta_number || null,
+              kta_number: validKta.kta_id || null,
               kta_issued_at: validKta.kta_issued_at || null,
             });
           }
@@ -155,13 +155,14 @@ const getLandingData = async (req, res) => {
       prisma.user.count(),
       // All approved rekomendasi events (recent 12)
       prisma.rekomendasiEvent.findMany({
-        where: { status: 'DISETUJUI' },
+        where: { status: 'DISETUJUI', suratRekomendasi: { not: null } },
         orderBy: { tanggalMulai: 'desc' },
         take: 12,
         select: {
           id: true, namaEvent: true, jenisEvent: true,
           tanggalMulai: true, tanggalSelesai: true,
           lokasi: true, deskripsi: true, penyelenggara: true,
+          poster: true, suratRekomendasi: true,
           pengcab: { select: { nama: true, kota: true } }
         }
       }),
@@ -172,7 +173,7 @@ const getLandingData = async (req, res) => {
         select: {
           id: true, namaKejurda: true, jenisEvent: true, targetPeserta: true,
           tanggalMulai: true, tanggalSelesai: true,
-          lokasi: true, deskripsi: true, poster: true,
+          lokasi: true, deskripsi: true, poster: true, suratRekomendasi: true,
           pengcabPengaju: { select: { nama: true, kota: true } }
         }
       }),
@@ -185,7 +186,7 @@ const getLandingData = async (req, res) => {
       select: {
         id: true, namaKejurda: true, jenisEvent: true, targetPeserta: true,
         tanggalMulai: true, tanggalSelesai: true,
-        lokasi: true, deskripsi: true, poster: true,
+        lokasi: true, deskripsi: true, poster: true, suratRekomendasi: true,
       }
     });
 

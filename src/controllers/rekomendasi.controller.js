@@ -103,6 +103,9 @@ const parseFormData = (req) => {
   const dokumenSuratFile = files.find(f => f.fieldname === 'dokumenSurat');
   const dokumenSurat = dokumenSuratFile ? `/uploads/${dokumenSuratFile.filename}` : null;
 
+  const posterFile = files.find(f => f.fieldname === 'poster');
+  const poster = posterFile ? `/uploads/${posterFile.filename}` : null;
+
   let persyaratan = null;
   if (req.body.persyaratan) {
     try { persyaratan = JSON.parse(req.body.persyaratan); } catch { persyaratan = {}; }
@@ -136,7 +139,7 @@ const parseFormData = (req) => {
     }
   }
 
-  return { namaEvent, jenisEvent, tanggalMulai, tanggalSelesai, lokasi, deskripsi, penyelenggara, kontakPerson, noBilingSimpaskor, pengcabId, mataLomba, proposal, dokumenSurat, persyaratan, submitAction };
+  return { namaEvent, jenisEvent, tanggalMulai, tanggalSelesai, lokasi, deskripsi, penyelenggara, kontakPerson, noBilingSimpaskor, pengcabId, mataLomba, proposal, dokumenSurat, poster, persyaratan, submitAction };
 };
 
 const create = async (req, res) => {
@@ -166,6 +169,7 @@ const create = async (req, res) => {
         kontakPerson: parsed.kontakPerson || null,
         noBilingSimpaskor: parsed.noBilingSimpaskor || null,
         dokumenSurat: parsed.dokumenSurat,
+        poster: parsed.poster || null,
         persyaratan: parsed.persyaratan || undefined,
         mataLomba: parsed.mataLomba || undefined,
         proposal: parsed.proposal || undefined,
@@ -232,6 +236,7 @@ const update = async (req, res) => {
     if (parsed.persyaratan) data.persyaratan = parsed.persyaratan;
     if (parsed.mataLomba) data.mataLomba = parsed.mataLomba;
     if (parsed.proposal) data.proposal = parsed.proposal;
+    if (parsed.poster) data.poster = parsed.poster;
 
     // Reset approval fields when resubmitting
     if (!isDraft) {

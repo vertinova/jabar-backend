@@ -83,6 +83,7 @@ model RekomendasiEvent {
   persyaratan     Json?          // Stores all persyaratan data (checkboxes, text, file paths)
   mataLomba       Json?          // Stores mata lomba selections with individual schedules
   proposal        String?        // File path for uploaded proposal kegiatan document
+  poster          String?        // File path for event poster/pamphlet
   status          StatusApproval @default(DRAFT)
   catatanPengcab  String?        @db.Text
   catatanAdmin    String?        @db.Text
@@ -148,6 +149,8 @@ model Kejurda {
   persyaratan    Json?
   mataLomba      Json?
   proposal       String?
+  nomorSurat        String?      // Auto-generated: UM.001/FORBASI-JABAR/II/2026
+  suratRekomendasi  String?      // Path to generated surat rekomendasi PDF
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

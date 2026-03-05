@@ -193,10 +193,10 @@ const login = async (req, res) => {
         if (!validPassword) {
           // Local password failed — try FORBASI API as fallback
           // (password might have changed on FORBASI side)
-          const forbasiUser = await verifyForbasiLogin(email, password);
-          if (forbasiUser) {
+          const forbasiResult = await verifyForbasiLogin(email, password);
+          if (forbasiResult.success && forbasiResult.user) {
             // FORBASI login succeeded, update local account
-            user = await handleForbasiUserLogin(email, forbasiUser, password);
+            user = await handleForbasiUserLogin(email, forbasiResult.user, password);
           } else {
             return res.status(401).json({ error: 'Username/email atau password salah' });
           }
@@ -204,20 +204,20 @@ const login = async (req, res) => {
       } else {
         // Not found locally — some FORBASI accounts use email as username,
         // so try FORBASI API as fallback
-        const forbasiUser = await verifyForbasiLogin(email, password);
-        if (!forbasiUser) {
-          return res.status(401).json({ error: 'Username/email atau password salah' });
+        const forbasiResult = await verifyForbasiLogin(email, password);
+        if (!forbasiResult.success || !forbasiResult.user) {
+          return res.status(401).json({ error: forbasiResult.error || 'Username/email atau password salah' });
         }
         // Proceed with FORBASI user flow (same as username login below)
-        user = await handleForbasiUserLogin(email, forbasiUser, password);
+        user = await handleForbasiUserLogin(email, forbasiResult.user, password);
       }
     } else if (email) {
       // Login with FORBASI username — verify password via FORBASI API
-      const forbasiUser = await verifyForbasiLogin(email, password);
-      if (!forbasiUser) {
-        return res.status(401).json({ error: 'Username atau password FORBASI salah' });
+      const forbasiResult = await verifyForbasiLogin(email, password);
+      if (!forbasiResult.success || !forbasiResult.user) {
+        return res.status(401).json({ error: forbasiResult.error || 'Username atau password FORBASI salah' });
       }
-      user = await handleForbasiUserLogin(email, forbasiUser, password);
+      user = await handleForbasiUserLogin(email, forbasiResult.user, password);
     } else {
       return res.status(401).json({ error: 'Username/email atau password salah' });
     }
