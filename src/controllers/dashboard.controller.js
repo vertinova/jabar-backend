@@ -2,23 +2,37 @@ const prisma = require('../lib/prisma');
 const { fetchForbasiAccounts, fetchForbasiAccount, fixForbasiFileUrl } = require('../lib/forbasi');
 
 // ── Smart cache for enriched anggota data ──
-// Cache invalidates when total count from API changes (new member detected)
-let anggotaCache = { data: null, lastTotal: 0 };
+// Cache invalidates when: TTL expires OR total count changes OR force refresh
+let anggotaCache = { 
+  data: null, 
+  lastTotal: 0, 
+  lastFetch: 0,
+  CACHE_TTL: 5 * 60 * 1000 // 5 minutes
+};
 
 // Current year for KTA filter (only show KTA issued in current year)
 const CURRENT_YEAR = new Date().getFullYear().toString(); // "2026"
 
 // Helper: ensure anggota cache is populated
-// Auto-refresh when new member detected (total count changed from API)
+// Auto-refresh when: TTL expired, new member detected, or force refresh
 const ensureAnggotaCache = async (forceRefresh = false) => {
   try {
+    const now = Date.now();
+    const cacheExpired = !anggotaCache.lastFetch || (now - anggotaCache.lastFetch) > anggotaCache.CACHE_TTL;
+    
+    // Return cached data if valid and not expired (unless force refresh)
+    if (!forceRefresh && !cacheExpired && anggotaCache.data) {
+      return anggotaCache.data;
+    }
+    
     // Fetch all USER accounts from API (with pagination)
     const accounts = await fetchForbasiAccounts({ role: 'user', per_page: 200 });
     const currentTotal = accounts.length;
     const hasNewData = currentTotal !== anggotaCache.lastTotal;
     
-    // Use cache if valid and no new data detected
-    if (!forceRefresh && anggotaCache.data && !hasNewData) {
+    // If only TTL expired (no new members), just refresh timestamp and return cached
+    if (!forceRefresh && !hasNewData && anggotaCache.data) {
+      anggotaCache.lastFetch = now;
       return anggotaCache.data;
     }
     
@@ -69,8 +83,13 @@ const ensureAnggotaCache = async (forceRefresh = false) => {
       });
     }
     
-    // Store result and total count for change detection
-    anggotaCache = { data: enriched, lastTotal: accounts.length };
+    // Store result with timestamp for TTL tracking
+    anggotaCache = { 
+      data: enriched, 
+      lastTotal: accounts.length, 
+      lastFetch: Date.now(),
+      CACHE_TTL: 5 * 60 * 1000
+    };
     console.log(`Anggota cache refreshed: ${enriched.length} with KTA Terbit ${CURRENT_YEAR} out of ${accounts.length} total accounts`);
     return enriched;
   } catch (err) {
@@ -244,12 +263,13 @@ const getLandingData = async (req, res) => {
 };
 
 // ── PUBLIC Anggota FORBASI Data (no auth) ──
-// Auto-refreshes when new member detected (total count change)
+// Auto-refreshes when: TTL expires, new member detected, or refresh=true
 const getAnggotaForbasi = async (req, res) => {
   try {
-    const { search } = req.query;
+    const { search, refresh } = req.query;
+    const forceRefresh = refresh === 'true';
 
-    let result = await ensureAnggotaCache();
+    let result = await ensureAnggotaCache(forceRefresh);
 
     // Apply search filter if provided
     if (search) {
@@ -262,7 +282,12 @@ const getAnggotaForbasi = async (req, res) => {
       );
     }
 
-    res.json({ success: true, total: result.length, data: result });
+    res.json({ 
+      success: true, 
+      total: result.length, 
+      cacheAge: anggotaCache.lastFetch ? Math.round((Date.now() - anggotaCache.lastFetch) / 1000) : 0,
+      data: result 
+    });
   } catch (error) {
     console.error('Fetch anggota FORBASI error:', error);
     res.status(500).json({ error: 'Gagal memuat data anggota', detail: error.message });
@@ -271,8 +296,8 @@ const getAnggotaForbasi = async (req, res) => {
 
 // ── Clear anggota cache (admin only) ──
 const clearAnggotaCache = async (req, res) => {
-  anggotaCache = { data: null, lastTotal: 0 };
-  res.json({ success: true, message: 'Cache anggota berhasil di-refresh' });
+  anggotaCache = { data: null, lastTotal: 0, lastFetch: 0, CACHE_TTL: 5 * 60 * 1000 };
+  res.json({ success: true, message: 'Cache anggota berhasil di-clear, akan refresh otomatis pada request berikutnya' });
 };
 
 module.exports = { getStats, getLandingData, getAnggotaForbasi, clearAnggotaCache };
