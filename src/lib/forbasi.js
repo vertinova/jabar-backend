@@ -181,9 +181,11 @@ function mapForbasiToPengcab(apiData) {
  */
 function fixForbasiFileUrl(url) {
   if (!url || typeof url !== 'string') return url;
+  // Upgrade http to https to prevent mixed content errors
+  let fixed = url.replace(/^http:\/\//i, 'https://');
   // Skip if already has /uploads/ in path
-  if (url.includes('/uploads/')) return url;
-  return url.replace(
+  if (fixed.includes('/uploads/')) return fixed;
+  return fixed.replace(
     /\/forbasi\/php\/(kta_files|generated_kta|generated_kta_pb|generated_kta_pengda)\//g,
     '/forbasi/php/uploads/$1/'
   );
