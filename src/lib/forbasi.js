@@ -3,16 +3,18 @@
  * Fetches pengda & pengcab data from forbasi.or.id
  */
 
-const FORBASI_API_URL = process.env.FORBASI_API_URL || 'https://forbasi.or.id/forbasi/php/api_pengcab_jabar.php';
+const FORBASI_API_URL = process.env.FORBASI_API_URL || 'https://forbasi.or.id/api/regional/jabar';
 const FORBASI_API_KEY = process.env.FORBASI_API_KEY || '';
 
 /**
  * Fetch all pengcab Jawa Barat from FORBASI API
  */
 async function fetchPengcabFromForbasi() {
-  const url = `${FORBASI_API_URL}?action=accounts&role=pengcab&per_page=100&api_key=${encodeURIComponent(FORBASI_API_KEY)}`;
+  const url = `${FORBASI_API_URL}/accounts?role=pengcab&per_page=100`;
 
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    headers: { 'X-API-Key': FORBASI_API_KEY }
+  });
   if (!response.ok) {
     throw new Error(`FORBASI API error: ${response.status} ${response.statusText}`);
   }
@@ -32,9 +34,11 @@ async function fetchPengcabFromForbasi() {
  * Fetch detail of a specific pengcab account by username (v3.0)
  */
 async function fetchPengcabDetail(username) {
-  const url = `${FORBASI_API_URL}?action=account&username=${encodeURIComponent(username)}&api_key=${encodeURIComponent(FORBASI_API_KEY)}`;
+  const url = `${FORBASI_API_URL}/account?username=${encodeURIComponent(username)}`;
 
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    headers: { 'X-API-Key': FORBASI_API_KEY }
+  });
   if (!response.ok) {
     throw new Error(`FORBASI API error: ${response.status} ${response.statusText}`);
   }
@@ -52,7 +56,7 @@ async function fetchPengcabDetail(username) {
  * Returns user data if login is successful, throws error with message if failed
  */
 async function verifyForbasiLogin(username, password) {
-  const url = `${FORBASI_API_URL}?action=login`;
+  const url = `${FORBASI_API_URL}/login`;
 
   const response = await fetch(url, {
     method: 'POST',
@@ -84,13 +88,15 @@ async function fetchForbasiAccounts(options = {}) {
   let hasMore = true;
   
   while (hasMore) {
-    const params = new URLSearchParams({ action: 'accounts', api_key: FORBASI_API_KEY });
+    const params = new URLSearchParams();
     if (options.role) params.append('role', options.role);
     if (options.search) params.append('search', options.search);
     params.append('page', page);
     params.append('per_page', options.per_page || 200);
 
-    const response = await fetch(`${FORBASI_API_URL}?${params}`);
+    const response = await fetch(`${FORBASI_API_URL}/accounts?${params}`, {
+      headers: { 'X-API-Key': FORBASI_API_KEY }
+    });
     const result = await response.json().catch(() => null);
     
     if (!result || !result.success || !result.data || result.data.length === 0) {
@@ -114,9 +120,11 @@ async function fetchForbasiAccounts(options = {}) {
  */
 async function fetchForbasiAccount(identifier) {
   const param = typeof identifier === 'number' ? `id=${identifier}` : `username=${encodeURIComponent(identifier)}`;
-  const url = `${FORBASI_API_URL}?action=account&${param}&api_key=${encodeURIComponent(FORBASI_API_KEY)}`;
+  const url = `${FORBASI_API_URL}/account?${param}`;
 
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    headers: { 'X-API-Key': FORBASI_API_KEY }
+  });
   const result = await response.json().catch(() => null);
   if (!result || !result.success) return null;
   return result.data || result.user || null;
@@ -128,7 +136,7 @@ async function fetchForbasiAccount(identifier) {
  * @param {Object} fields - { club_name, email, phone, address, school_name }
  */
 async function updateForbasiProfile(id, fields) {
-  const url = `${FORBASI_API_URL}?action=update_profile`;
+  const url = `${FORBASI_API_URL}/update-profile`;
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-API-Key': FORBASI_API_KEY },
@@ -142,7 +150,7 @@ async function updateForbasiProfile(id, fields) {
  * Change password via FORBASI API (v3.0)
  */
 async function changeForbasiPassword(id, oldPassword, newPassword) {
-  const url = `${FORBASI_API_URL}?action=change_password`;
+  const url = `${FORBASI_API_URL}/change-password`;
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-API-Key': FORBASI_API_KEY },
@@ -187,9 +195,11 @@ function fixForbasiFileUrl(url) {
  */
 async function fetchForbasiKta(identifier) {
   const param = typeof identifier === 'number' ? `user_id=${identifier}` : `username=${encodeURIComponent(identifier)}`;
-  const url = `${FORBASI_API_URL}?action=kta&${param}&api_key=${encodeURIComponent(FORBASI_API_KEY)}`;
+  const url = `${FORBASI_API_URL}/kta?${param}`;
 
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    headers: { 'X-API-Key': FORBASI_API_KEY }
+  });
   const result = await response.json().catch(() => null);
   if (!result || !result.success) return { total_kta: 0, kta: [] };
 
