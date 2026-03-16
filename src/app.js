@@ -15,6 +15,8 @@ const landingConfigRoutes = require('./routes/landingConfig.routes');
 const formatDokumenRoutes = require('./routes/formatDokumen.routes');
 const siteConfigRoutes = require('./routes/siteConfig.routes');
 const simpaskorRoutes = require('./routes/simpaskor.routes');
+const apiKeyRoutes = require('./routes/apiKey.routes');
+const externalRoutes = require('./routes/external.routes');
 
 const app = express();
 
@@ -38,6 +40,8 @@ app.use('/api/landing', landingConfigRoutes);
 app.use('/api/format-dokumen', formatDokumenRoutes);
 app.use('/api/site-config', siteConfigRoutes);
 app.use('/api/simpaskor', simpaskorRoutes);
+app.use('/api/api-keys', apiKeyRoutes);
+app.use('/api/external', externalRoutes);
 
 // Health check
 app.get('/api/health', async (req, res) => {

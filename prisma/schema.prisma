@@ -299,3 +299,36 @@ model StrukturOrganisasi {
 
   @@map("struktur_organisasi")
 }
+
+// ==================== API KEYS (Remote Access) ====================
+model ApiKey {
+  id          Int       @id @default(autoincrement())
+  name        String    // e.g. "FORBASI Pusat"
+  keyHash     String    @unique // SHA-256 hash of the actual key
+  keyPrefix   String    // First 8 chars for display: "sk_ab12..."
+  permissions Json      // JSON array: ["landing:read","landing:write","landing:delete"]
+  active      Boolean   @default(true)
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  logs ApiKeyLog[]
+
+  @@map("api_keys")
+}
+
+model ApiKeyLog {
+  id        Int      @id @default(autoincrement())
+  apiKeyId  Int
+  endpoint  String
+  method    String
+  ip        String?
+  userAgent String?  @db.Text
+  statusCode Int?
+  createdAt DateTime @default(now())
+
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+
+  @@index([apiKeyId, createdAt])
+  @@map("api_key_logs")
+}
