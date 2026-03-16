@@ -59,7 +59,7 @@ const handlePelunasanUpload = (req, res, next) => {
 router.get('/landing/public/:region', async (req, res) => {
   const prisma = require('../lib/prisma');
   try {
-    const [heroSlides, berita, struktur, config, kejurdaOpen] = await Promise.all([
+    const [heroSlides, berita, struktur, config, kejurdaOpen, rekomendasi, pengcab, stats] = await Promise.all([
       prisma.heroSlide.findMany({ where: { aktif: true }, orderBy: { urutan: 'asc' } }),
       prisma.berita.findMany({ where: { aktif: true }, orderBy: { createdAt: 'desc' }, take: 10 }),
       prisma.strukturOrganisasi.findMany({ where: { aktif: true }, orderBy: { urutan: 'asc' } }),
@@ -73,6 +73,34 @@ router.get('/landing/public/:region', async (req, res) => {
         orderBy: { tanggalMulai: 'asc' },
         select: { id: true, namaKejurda: true, jenisEvent: true, tanggalMulai: true, tanggalSelesai: true, lokasi: true, poster: true, deskripsi: true },
       }),
+      prisma.rekomendasiEvent.findMany({
+        where: { status: 'DISETUJUI' },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+        select: {
+          id: true, namaEvent: true, jenisEvent: true, tanggalMulai: true, tanggalSelesai: true,
+          lokasi: true, penyelenggara: true, status: true, poster: true,
+          approvedPengdaAt: true, nomorSurat: true, createdAt: true,
+          pengcab: { select: { nama: true, kota: true } },
+        },
+      }),
+      prisma.pengcab.findMany({
+        where: { status: 'AKTIF' },
+        orderBy: { nama: 'asc' },
+        select: { id: true, nama: true, kota: true, ketua: true, logo: true },
+      }),
+      // Quick stats
+      Promise.all([
+        prisma.pengcab.count({ where: { status: 'AKTIF' } }),
+        prisma.rekomendasiEvent.count({ where: { status: 'DISETUJUI' } }),
+        prisma.kejurda.count({ where: { statusApproval: 'DISETUJUI' } }),
+        prisma.user.count(),
+      ]).then(([pengcabCount, rekomendasiCount, kejurdaCount, userCount]) => ({
+        pengcab: pengcabCount,
+        rekomendasi: rekomendasiCount,
+        kejurda: kejurdaCount,
+        users: userCount,
+      })),
     ]);
     res.json({
       region: req.params.region,
@@ -81,6 +109,9 @@ router.get('/landing/public/:region', async (req, res) => {
       struktur,
       config,
       kejurdaOpen,
+      rekomendasi,
+      pengcab,
+      stats,
     });
   } catch (error) {
     console.error('[External] Public landing error:', error.message);
