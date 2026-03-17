@@ -300,6 +300,22 @@ model StrukturOrganisasi {
   @@map("struktur_organisasi")
 }
 
+// ==================== MERCHANDISE ====================
+model Merchandise {
+  id          Int      @id @default(autoincrement())
+  nama        String
+  deskripsi   String?  @db.Text
+  harga       Decimal? @db.Decimal(12, 2)
+  gambar      String?
+  link        String?  // External purchase link
+  urutan      Int      @default(0)
+  aktif       Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("merchandise")
+}
+
 // ==================== API KEYS (Remote Access) ====================
 model ApiKey {
   id          Int       @id @default(autoincrement())

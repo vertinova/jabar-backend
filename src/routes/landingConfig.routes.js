@@ -7,6 +7,10 @@ const ctrl = require('../controllers/landingConfig.controller');
 router.post('/feedback', ctrl.submitFeedback);
 router.get('/struktur', ctrl.getStruktur); // Public untuk landing page
 router.get('/config', ctrl.getSiteConfig); // Public untuk footer & landing page
+router.get('/hero-slides/public', ctrl.getHeroSlides); // Public untuk landing page
+router.get('/berita/public', ctrl.getBerita); // Public untuk landing page
+router.get('/berita/public/:id', ctrl.getBeritaById); // Public detail berita
+router.get('/merchandise', ctrl.getMerchandise); // Public untuk landing page
 
 // ── Admin routes ──
 router.use(authenticate, isAdmin);
@@ -34,6 +38,13 @@ router.delete('/feedback/:id', ctrl.deleteFeedback);
 
 // Site Config
 router.put('/config', ctrl.updateSiteConfig);
+
+// Merchandise
+router.get('/merchandise/admin', ctrl.getMerchandise);
+router.get('/merchandise/:id', ctrl.getMerchandiseById);
+router.post('/merchandise', upload.single('gambar'), ctrl.createMerchandise);
+router.put('/merchandise/:id', upload.single('gambar'), ctrl.updateMerchandise);
+router.delete('/merchandise/:id', ctrl.deleteMerchandise);
 
 // Struktur Organisasi (Admin only for CUD)
 router.post('/struktur', upload.single('foto'), ctrl.createStruktur);

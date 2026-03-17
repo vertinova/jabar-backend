@@ -357,6 +357,97 @@ const deleteStruktur = async (req, res) => {
   }
 };
 
+// ══════════════════════════════════════════
+// MERCHANDISE
+// ══════════════════════════════════════════
+const getMerchandise = async (req, res) => {
+  try {
+    const items = await prisma.merchandise.findMany({ orderBy: { urutan: 'asc' } });
+    res.json(items);
+  } catch (error) {
+    console.error('[Landing] getMerchandise error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+const getMerchandiseById = async (req, res) => {
+  try {
+    const item = await prisma.merchandise.findUnique({ where: { id: parseInt(req.params.id) } });
+    if (!item) return res.status(404).json({ error: 'Merchandise tidak ditemukan' });
+    res.json(item);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+const createMerchandise = async (req, res) => {
+  try {
+    const { nama, deskripsi, harga, link, urutan, aktif } = req.body;
+    if (!nama) return res.status(400).json({ error: 'Nama produk wajib diisi' });
+
+    const data = {
+      nama,
+      deskripsi: deskripsi || null,
+      harga: harga ? parseFloat(harga) : null,
+      link: link || null,
+      urutan: parseInt(urutan) || 0,
+      aktif: aktif !== 'false',
+    };
+    if (req.file) {
+      if (!verifyUpload(req.file)) {
+        return res.status(500).json({ error: 'File gagal disimpan ke disk' });
+      }
+      data.gambar = `/uploads/${req.file.filename}`;
+    }
+    const item = await prisma.merchandise.create({ data });
+    console.log('[Landing] Merchandise created:', item.id);
+    res.status(201).json(item);
+  } catch (error) {
+    console.error('[Landing] createMerchandise error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+const updateMerchandise = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const data = {};
+    if (req.body.nama !== undefined) data.nama = req.body.nama;
+    if (req.body.deskripsi !== undefined) data.deskripsi = req.body.deskripsi || null;
+    if (req.body.harga !== undefined) data.harga = req.body.harga ? parseFloat(req.body.harga) : null;
+    if (req.body.link !== undefined) data.link = req.body.link || null;
+    if (req.body.urutan !== undefined) data.urutan = parseInt(req.body.urutan) || 0;
+    if (req.body.aktif !== undefined) data.aktif = req.body.aktif === 'true';
+    if (req.file) {
+      if (!verifyUpload(req.file)) {
+        return res.status(500).json({ error: 'File gagal disimpan ke disk' });
+      }
+      const old = await prisma.merchandise.findUnique({ where: { id: parseInt(id) } });
+      if (old?.gambar) safeDeleteFile(old.gambar);
+      data.gambar = `/uploads/${req.file.filename}`;
+    }
+    const item = await prisma.merchandise.update({ where: { id: parseInt(id) }, data });
+    res.json(item);
+  } catch (error) {
+    console.error('[Landing] updateMerchandise error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+const deleteMerchandise = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const item = await prisma.merchandise.findUnique({ where: { id: parseInt(id) } });
+    if (!item) return res.status(404).json({ error: 'Merchandise tidak ditemukan' });
+    if (item.gambar) safeDeleteFile(item.gambar);
+    await prisma.merchandise.delete({ where: { id: parseInt(id) } });
+    res.json({ message: 'Merchandise dihapus' });
+  } catch (error) {
+    console.error('[Landing] deleteMerchandise error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+};
+
 // ── Debug: check upload health ──
 const checkUploadHealth = async (req, res) => {
   try {
@@ -403,6 +494,8 @@ module.exports = {
   getSiteConfig, updateSiteConfig,
   // Struktur Organisasi
   getStruktur, createStruktur, updateStruktur, deleteStruktur,
+  // Merchandise
+  getMerchandise, getMerchandiseById, createMerchandise, updateMerchandise, deleteMerchandise,
   // Debug
   checkUploadHealth,
 };
