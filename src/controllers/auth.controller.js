@@ -1,7 +1,12 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const prisma = require('../lib/prisma');
 const { verifyForbasiLogin, fetchForbasiKta, fixForbasiFileUrl, changeForbasiPassword } = require('../lib/forbasi');
+
+// In-memory SSO token store (short-lived, single-use)
+const ssoTokens = new Map();
+const SSO_TOKEN_TTL = 60_000; // 60 seconds
 
 /**
  * Handle FORBASI user login — find/create local account from FORBASI data.
@@ -389,4 +394,69 @@ const getKta = async (req, res) => {
   }
 };
 
-module.exports = { register, login, getProfile, updateProfile, getUserDashboard, getKta };
+/**
+ * Generate a short-lived, single-use SSO token for cross-domain auth.
+ * Authenticated user gets a token they can pass to forbasi.or.id to auto-login.
+ */
+const generateSsoToken = async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { id: true, name: true, email: true, role: true, forbasiId: true }
+    });
+    if (!user) return res.status(404).json({ error: 'User tidak ditemukan' });
+
+    const token = crypto.randomBytes(32).toString('hex');
+    ssoTokens.set(token, {
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      forbasiId: user.forbasiId,
+      name: user.name,
+      expiresAt: Date.now() + SSO_TOKEN_TTL,
+    });
+
+    // Auto-cleanup expired token
+    setTimeout(() => ssoTokens.delete(token), SSO_TOKEN_TTL);
+
+    res.json({ token, expiresIn: SSO_TOKEN_TTL / 1000 });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal generate SSO token', detail: error.message });
+  }
+};
+
+/**
+ * Validate and consume an SSO token (called by forbasi.or.id).
+ * Returns user info if token is valid, then deletes it (single-use).
+ */
+const validateSsoToken = async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: 'Token wajib diisi' });
+
+    const data = ssoTokens.get(token);
+    if (!data) return res.status(401).json({ error: 'Token tidak valid atau sudah digunakan' });
+    if (Date.now() > data.expiresAt) {
+      ssoTokens.delete(token);
+      return res.status(401).json({ error: 'Token sudah kedaluwarsa' });
+    }
+
+    // Single-use: delete after validation
+    ssoTokens.delete(token);
+
+    res.json({
+      valid: true,
+      user: {
+        userId: data.userId,
+        email: data.email,
+        role: data.role,
+        forbasiId: data.forbasiId,
+        name: data.name,
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal validasi SSO token', detail: error.message });
+  }
+};
+
+module.exports = { register, login, getProfile, updateProfile, getUserDashboard, getKta, generateSsoToken, validateSsoToken };
