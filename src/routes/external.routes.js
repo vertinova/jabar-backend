@@ -155,6 +155,13 @@ router.delete('/landing/feedback/:id', requirePermission('landing:delete'), land
 router.get('/landing/config', requirePermission('landing:read'), landingCtrl.getSiteConfig);
 router.put('/landing/config', requirePermission('landing:write'), landingCtrl.updateSiteConfig);
 
+// Merchandise
+router.get('/landing/merchandise', requirePermission('landing:read'), landingCtrl.getMerchandise);
+router.get('/landing/merchandise/:id', requirePermission('landing:read'), landingCtrl.getMerchandiseById);
+router.post('/landing/merchandise', requirePermission('landing:write'), upload.single('gambar'), landingCtrl.createMerchandise);
+router.put('/landing/merchandise/:id', requirePermission('landing:write'), upload.single('gambar'), landingCtrl.updateMerchandise);
+router.delete('/landing/merchandise/:id', requirePermission('landing:delete'), landingCtrl.deleteMerchandise);
+
 // ══════════════════════════════════════════
 // PENGCAB
 // ══════════════════════════════════════════
