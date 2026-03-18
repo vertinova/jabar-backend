@@ -64,8 +64,8 @@ async function generateSuratRekomendasi(rekomendasiEvent) {
       const actualLogo = logoCandidates.find(p => fs.existsSync(p)) || null;
 
       const kopTop = 15;
-      const logoW = 160;
-      const logoH = 110;
+      const logoW = 220;
+      const logoH = 150;
 
       if (actualLogo) {
         doc.image(actualLogo, marginL, kopTop, { fit: [logoW, logoH] });
@@ -80,7 +80,7 @@ async function generateSuratRekomendasi(rekomendasiEvent) {
       const greenColor = '#1a8c1a';
 
       // Vertical offset to center text block relative to bigger logo
-      const textTopOffset = 18;
+      const textTopOffset = 30;
 
       doc.fontSize(11).font('Helvetica-Bold').fillColor(greenColor)
         .text('PENGURUS DAERAH', textLeft, kopTop + textTopOffset, { width: textW, align: 'left' });
@@ -104,7 +104,7 @@ async function generateSuratRekomendasi(rekomendasiEvent) {
       doc.fillColor('black');
 
       // Double line separator
-      const lineY = kopTop + 110;
+      const lineY = kopTop + 155;
       doc.moveTo(marginL, lineY).lineTo(pw - marginR, lineY).lineWidth(2.5).strokeColor(greenColor).stroke();
       doc.moveTo(marginL, lineY + 3).lineTo(pw - marginR, lineY + 3).lineWidth(0.5).strokeColor(greenColor).stroke();
       // Reset stroke color
