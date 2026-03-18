@@ -63,9 +63,9 @@ async function generateSuratRekomendasi(rekomendasiEvent) {
       ];
       const actualLogo = logoCandidates.find(p => fs.existsSync(p)) || null;
 
-      const kopTop = 20;
-      const logoW = 120;
-      const logoH = 90;
+      const kopTop = 15;
+      const logoW = 160;
+      const logoH = 110;
 
       if (actualLogo) {
         doc.image(actualLogo, marginL, kopTop, { fit: [logoW, logoH] });
@@ -79,29 +79,32 @@ async function generateSuratRekomendasi(rekomendasiEvent) {
       // Green color for header text
       const greenColor = '#1a8c1a';
 
+      // Vertical offset to center text block relative to bigger logo
+      const textTopOffset = 18;
+
       doc.fontSize(11).font('Helvetica-Bold').fillColor(greenColor)
-        .text('PENGURUS DAERAH', textLeft, kopTop + 8, { width: textW, align: 'left' });
+        .text('PENGURUS DAERAH', textLeft, kopTop + textTopOffset, { width: textW, align: 'left' });
       doc.fontSize(15).font('Helvetica-Bold').fillColor(greenColor)
-        .text('FORUM BARIS INDONESIA', textLeft, kopTop + 22, { width: textW, align: 'left' });
+        .text('FORUM BARIS INDONESIA', textLeft, kopTop + textTopOffset + 14, { width: textW, align: 'left' });
       doc.fontSize(12).font('Helvetica-Bold').fillColor(greenColor)
-        .text('PROVINSI JAWA BARAT', textLeft, kopTop + 40, { width: textW, align: 'left' });
+        .text('PROVINSI JAWA BARAT', textLeft, kopTop + textTopOffset + 32, { width: textW, align: 'left' });
 
       // Address lines – green colored, right below title text
       doc.fontSize(7).font('Helvetica').fillColor(greenColor)
         .text('Alamat : Jl. Farmakologi 01 Kel.Cigadung Kec.Cibeunying Kaler Kota Bandung, Jawa Barat',
-          textLeft, kopTop + 57, { width: textW, align: 'left' });
+          textLeft, kopTop + textTopOffset + 50, { width: textW, align: 'left' });
       doc.fontSize(7).font('Helvetica').fillColor(greenColor)
         .text('Email : forbasijawabarat@gmail.com, IG : forbasi.jabar, Web : jabar.forbasi.or.id',
-          textLeft, kopTop + 67, { width: textW, align: 'left' });
+          textLeft, kopTop + textTopOffset + 60, { width: textW, align: 'left' });
       doc.fontSize(7).font('Helvetica').fillColor(greenColor)
         .text('HP : +62 822-9557-6388 (call/wa), +62 851-1951-1898 (wa)',
-          textLeft, kopTop + 77, { width: textW, align: 'left' });
+          textLeft, kopTop + textTopOffset + 70, { width: textW, align: 'left' });
 
       // Reset to black for body
       doc.fillColor('black');
 
       // Double line separator
-      const lineY = kopTop + 95;
+      const lineY = kopTop + 110;
       doc.moveTo(marginL, lineY).lineTo(pw - marginR, lineY).lineWidth(2.5).strokeColor(greenColor).stroke();
       doc.moveTo(marginL, lineY + 3).lineTo(pw - marginR, lineY + 3).lineWidth(0.5).strokeColor(greenColor).stroke();
       // Reset stroke color
@@ -117,7 +120,7 @@ async function generateSuratRekomendasi(rekomendasiEvent) {
       y += 20;
 
       // Nomor surat – from auto-generated nomorSurat field
-      const nomorSurat = `Nomor : ${rekomendasiEvent.nomorSurat || 'UM.     /FORBASI-JABAR/     /' + year}`;
+      const nomorSurat = `Nomor : ${rekomendasiEvent.nomorSurat || 'UM.     /FORBASI-JABAR/     /' + new Date().getFullYear()}`;
       doc.fontSize(9).font('Helvetica')
         .text(nomorSurat, marginL, y, { width: cw, align: 'center' });
       y += 28;
@@ -219,9 +222,9 @@ async function generateSuratRekomendasi(rekomendasiEvent) {
       // Check if we need a new page
       if (y > 620) { doc.addPage(); y = 60; }
 
-      // Date right-aligned
+      // Date centered above org name
       doc.fontSize(fs10).font('Helvetica')
-        .text(`Bandung, ${dateStr}`, marginL, y, { width: cw, align: 'right' });
+        .text(`Bandung, ${dateStr}`, marginL, y, { width: cw, align: 'center' });
       y += 18;
 
       // Org name block (centered)

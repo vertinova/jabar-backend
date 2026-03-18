@@ -276,8 +276,8 @@ const updateStatus = async (req, res) => {
     if (status === 'DISETUJUI') {
       data.approvedPengdaAt = new Date();
       if (catatanAdmin) data.catatanAdmin = catatanAdmin;
-      // Auto-generate nomor surat
-      data.nomorSurat = await generateNomorSurat();
+      // Use custom nomor surat if provided, otherwise auto-generate
+      data.nomorSurat = req.body.nomorSurat?.trim() || await generateNomorSurat();
     }
     if (status === 'DITOLAK') {
       if (!catatanAdmin?.trim()) return res.status(400).json({ error: 'Catatan alasan penolakan wajib diisi' });
@@ -331,4 +331,38 @@ const remove = async (req, res) => {
   }
 };
 
-module.exports = { getAll, getById, create, update, updateStatus, remove };
+const regenerateSurat = async (req, res) => {
+  try {
+    const event = await prisma.rekomendasiEvent.findUnique({
+      where: { id: parseInt(req.params.id) },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+        pengcab: { select: { id: true, nama: true, kota: true } }
+      }
+    });
+    if (!event) return res.status(404).json({ error: 'Data tidak ditemukan' });
+    if (event.status !== 'DISETUJUI') return res.status(400).json({ error: 'Hanya rekomendasi yang sudah disetujui yang bisa di-generate ulang' });
+
+    // Update nomor surat if provided
+    if (req.body.nomorSurat?.trim()) {
+      await prisma.rekomendasiEvent.update({
+        where: { id: event.id },
+        data: { nomorSurat: req.body.nomorSurat.trim() }
+      });
+      event.nomorSurat = req.body.nomorSurat.trim();
+    }
+
+    const suratPath = await generateSuratRekomendasi(event);
+    await prisma.rekomendasiEvent.update({
+      where: { id: event.id },
+      data: { suratRekomendasi: suratPath }
+    });
+    event.suratRekomendasi = suratPath;
+
+    res.json({ message: 'Surat rekomendasi berhasil di-generate ulang', event });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal generate ulang surat', detail: error.message });
+  }
+};
+
+module.exports = { getAll, getById, create, update, updateStatus, remove, regenerateSurat };

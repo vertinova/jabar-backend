@@ -180,6 +180,7 @@ router.get('/rekomendasi/:id', requirePermission('rekomendasi:read'), rekomendas
 router.post('/rekomendasi', requirePermission('rekomendasi:write'), handleUploadAny, rekomendasiCtrl.create);
 router.put('/rekomendasi/:id', requirePermission('rekomendasi:write'), handleUploadAny, rekomendasiCtrl.update);
 router.patch('/rekomendasi/:id/status', requirePermission('rekomendasi:write'), rekomendasiCtrl.updateStatus);
+router.post('/rekomendasi/:id/regenerate-surat', requirePermission('rekomendasi:write'), rekomendasiCtrl.regenerateSurat);
 router.delete('/rekomendasi/:id', requirePermission('rekomendasi:delete'), rekomendasiCtrl.remove);
 
 // ══════════════════════════════════════════
