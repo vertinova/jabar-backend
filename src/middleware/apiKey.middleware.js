@@ -63,16 +63,6 @@ const authenticateApiKey = async (req, res, next) => {
       permissions: apiKey.permissions || [],
     };
 
-    // Set req.user for controllers that expect it (e.g. rekomendasi)
-    // External API requests from Pusat act as ADMIN
-    if (!req.user) {
-      req.user = {
-        id: null,
-        role: 'ADMIN',
-        name: apiKey.name || 'External API',
-      };
-    }
-
     next();
   } catch (error) {
     console.error('[ApiKey] Auth error:', error.message);
