@@ -167,6 +167,32 @@ router.delete('/landing/merchandise/:id', requirePermission('landing:delete'), l
 // PENGCAB
 // ══════════════════════════════════════════
 router.get('/pengcab', requirePermission('pengcab:read'), pengcabCtrl.getAll);
+
+// Lookup pengcab by username or forbasiId
+router.get('/pengcab/lookup', requirePermission('pengcab:read'), async (req, res) => {
+  try {
+    const { username, forbasiId } = req.query;
+    if (!username && !forbasiId) {
+      return res.status(400).json({ error: 'Parameter username atau forbasiId wajib diisi' });
+    }
+
+    const where = {};
+    if (username) where.username = username;
+    if (forbasiId) where.forbasiId = parseInt(forbasiId);
+
+    const pengcab = await prisma.pengcab.findFirst({
+      where,
+      select: { id: true, forbasiId: true, nama: true, kota: true, username: true, status: true },
+    });
+
+    if (!pengcab) return res.status(404).json({ error: 'Pengcab tidak ditemukan' });
+    res.json(pengcab);
+  } catch (error) {
+    console.error('Pengcab lookup error:', error);
+    res.status(500).json({ error: 'Gagal mencari pengcab' });
+  }
+});
+
 router.get('/pengcab/:id', requirePermission('pengcab:read'), pengcabCtrl.getById);
 router.post('/pengcab', requirePermission('pengcab:write'), upload.single('logo'), pengcabCtrl.create);
 router.post('/pengcab/sync-forbasi', requirePermission('pengcab:write'), pengcabCtrl.syncFromForbasi);
