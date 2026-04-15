@@ -19,7 +19,7 @@ const handleUploadAny = (req, res, next) => {
   upload.any()(req, res, (err) => {
     if (err) {
       const msg = err.code === 'LIMIT_FILE_SIZE'
-        ? 'Ukuran file terlalu besar. Maksimal 5MB per file.'
+        ? 'Ukuran file terlalu besar. Maksimal 10MB per file.'
         : err.message || 'Gagal upload file';
       return res.status(400).json({ error: msg });
     }
@@ -36,7 +36,7 @@ const handlePendaftaranUpload = (req, res, next) => {
   ])(req, res, (err) => {
     if (err) {
       const msg = err.code === 'LIMIT_FILE_SIZE'
-        ? 'Ukuran file terlalu besar. Maksimal 5MB per file.'
+        ? 'Ukuran file terlalu besar. Maksimal 10MB per file.'
         : err.message || 'Gagal upload file';
       return res.status(400).json({ error: msg });
     }

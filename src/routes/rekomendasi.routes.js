@@ -1,5 +1,5 @@
 const router = require('express').Router();
-const { getAll, getById, create, update, updateStatus, remove } = require('../controllers/rekomendasi.controller');
+const { getAll, getById, create, update, updateStatus, remove, regenerateSurat } = require('../controllers/rekomendasi.controller');
 const { authenticate, isAdmin } = require('../middleware/auth.middleware');
 const upload = require('../middleware/upload.middleware');
 
@@ -9,7 +9,7 @@ const handleUpload = (req, res, next) => {
     if (err) {
       console.error('Multer upload error:', err.message);
       const msg = err.code === 'LIMIT_FILE_SIZE'
-        ? 'Ukuran file terlalu besar. Maksimal 5MB per file.'
+        ? 'Ukuran file terlalu besar. Maksimal 10MB per file.'
         : err.message || 'Gagal upload file';
       return res.status(400).json({ error: msg });
     }
@@ -22,6 +22,7 @@ router.get('/:id', authenticate, getById);
 router.post('/', authenticate, handleUpload, create);
 router.put('/:id', authenticate, handleUpload, update);
 router.patch('/:id/status', authenticate, isAdmin, updateStatus);
+router.post('/:id/regenerate-surat', authenticate, isAdmin, regenerateSurat);
 router.delete('/:id', authenticate, remove);
 
 module.exports = router;

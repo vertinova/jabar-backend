@@ -9,7 +9,7 @@ const wrapUpload = (multerFn) => (req, res, next) => {
     if (err) {
       console.error('Multer upload error:', err.message);
       const msg = err.code === 'LIMIT_FILE_SIZE'
-        ? 'Ukuran file terlalu besar. Maksimal 5MB per file.'
+        ? 'Ukuran file terlalu besar. Maksimal 10MB per file.'
         : err.message || 'Gagal upload file';
       return res.status(400).json({ error: msg });
     }
