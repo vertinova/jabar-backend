@@ -37,8 +37,17 @@ const getAll = async (req, res) => {
     const { search, status } = req.query;
     const where = {};
     
-    // Only ADMIN sees all, PENYELENGGARA sees own only
-    if (req.user.role !== 'ADMIN') {
+    // ADMIN sees all, PENGCAB sees events from their pengcab, others see own only
+    if (req.user.role === 'ADMIN') {
+      // Admin sees all
+    } else if (req.user.role === 'PENGCAB') {
+      const pengcabUser = await prisma.user.findUnique({ where: { id: req.user.id }, select: { pengcabId: true } });
+      if (pengcabUser?.pengcabId) {
+        where.pengcabId = pengcabUser.pengcabId;
+      } else {
+        where.userId = req.user.id;
+      }
+    } else {
       where.userId = req.user.id;
     }
     if (search) {
@@ -75,8 +84,15 @@ const getById = async (req, res) => {
     });
     if (!event) return res.status(404).json({ error: 'Data tidak ditemukan' });
     
-    // Non-admin hanya bisa lihat milik sendiri
-    if (req.user.role !== 'ADMIN' && event.userId !== req.user.id) {
+    // Non-admin: bisa lihat milik sendiri, PENGCAB bisa lihat event pengcabnya
+    if (req.user.role === 'ADMIN') {
+      // Admin bisa lihat semua
+    } else if (req.user.role === 'PENGCAB') {
+      const pengcabUser = await prisma.user.findUnique({ where: { id: req.user.id }, select: { pengcabId: true } });
+      if (!pengcabUser?.pengcabId || event.pengcabId !== pengcabUser.pengcabId) {
+        return res.status(403).json({ error: 'Akses ditolak' });
+      }
+    } else if (event.userId !== req.user.id) {
       return res.status(403).json({ error: 'Akses ditolak' });
     }
     
@@ -267,6 +283,39 @@ const update = async (req, res) => {
 const updateStatus = async (req, res) => {
   try {
     const { status, catatanAdmin, catatanPengcab } = req.body;
+    const id = parseInt(req.params.id);
+
+    // Fetch the existing event to validate transitions
+    const existing = await prisma.rekomendasiEvent.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Data tidak ditemukan' });
+
+    // Role-based approval flow:
+    // PENGCAB: PENDING → APPROVED_PENGCAB or DITOLAK
+    // ADMIN:   APPROVED_PENGCAB → DISETUJUI or DITOLAK (also can handle PENDING for backward compat)
+    if (req.user.role === 'PENGCAB') {
+      // Pengcab can only approve/reject PENDING events from their pengcab
+      const pengcabUser = await prisma.user.findUnique({ where: { id: req.user.id }, select: { pengcabId: true } });
+      if (!pengcabUser?.pengcabId || existing.pengcabId !== pengcabUser.pengcabId) {
+        return res.status(403).json({ error: 'Akses ditolak. Event bukan dari pengcab Anda.' });
+      }
+      if (existing.status !== 'PENDING') {
+        return res.status(400).json({ error: 'Pengcab hanya bisa memproses event berstatus PENDING' });
+      }
+      if (!['APPROVED_PENGCAB', 'DITOLAK'].includes(status)) {
+        return res.status(400).json({ error: 'Pengcab hanya bisa menyetujui atau menolak' });
+      }
+    } else if (req.user.role === 'ADMIN') {
+      // Admin processes APPROVED_PENGCAB → DISETUJUI/DITOLAK
+      if (status === 'APPROVED_PENGCAB') {
+        return res.status(400).json({ error: 'Persetujuan pengcab dilakukan oleh akun pengcab, bukan admin' });
+      }
+      if (status === 'DISETUJUI' && existing.status !== 'APPROVED_PENGCAB') {
+        return res.status(400).json({ error: 'Admin hanya bisa menyetujui event yang sudah disetujui pengcab (APPROVED_PENGCAB)' });
+      }
+    } else {
+      return res.status(403).json({ error: 'Akses ditolak' });
+    }
+
     const data = { status };
     
     if (status === 'APPROVED_PENGCAB') {
@@ -280,9 +329,13 @@ const updateStatus = async (req, res) => {
       data.nomorSurat = req.body.nomorSurat?.trim() || await generateNomorSurat();
     }
     if (status === 'DITOLAK') {
-      if (!catatanAdmin?.trim()) return res.status(400).json({ error: 'Catatan alasan penolakan wajib diisi' });
-      data.catatanAdmin = catatanAdmin.trim();
-      if (catatanPengcab) data.catatanPengcab = catatanPengcab;
+      const catatan = (req.user.role === 'PENGCAB') ? catatanPengcab : catatanAdmin;
+      if (!catatan?.trim()) return res.status(400).json({ error: 'Catatan alasan penolakan wajib diisi' });
+      if (req.user.role === 'PENGCAB') {
+        data.catatanPengcab = catatan.trim();
+      } else {
+        data.catatanAdmin = catatan.trim();
+      }
     }
 
     const event = await prisma.rekomendasiEvent.update({
