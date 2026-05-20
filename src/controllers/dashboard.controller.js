@@ -39,12 +39,14 @@ const buildRankingStandings = (results) => {
 
 // ── Smart cache for enriched anggota data ──
 // Cache invalidates when: TTL expires OR total count changes OR force refresh
+const ANGGOTA_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
 let anggotaCache = { 
   data: null, 
   lastTotal: 0, 
   lastFetch: 0,
-  CACHE_TTL: 5 * 60 * 1000 // 5 minutes
+  CACHE_TTL: ANGGOTA_CACHE_TTL
 };
+let anggotaRefreshPromise = null;
 
 // Current year for KTA filter (only show KTA issued in current year)
 const CURRENT_YEAR = new Date().getFullYear().toString(); // "2026"
@@ -84,6 +86,12 @@ const ensureAnggotaCache = async (forceRefresh = false) => {
     if (!forceRefresh && !cacheExpired && anggotaCache.data) {
       return anggotaCache.data;
     }
+
+    if (anggotaRefreshPromise) {
+      return await anggotaRefreshPromise;
+    }
+
+    anggotaRefreshPromise = (async () => {
     
     // Fetch all USER accounts from API (with pagination)
     const accounts = await fetchForbasiAccounts({ role: 'user', per_page: 200 });
@@ -153,10 +161,17 @@ const ensureAnggotaCache = async (forceRefresh = false) => {
       data: enriched, 
       lastTotal: accounts.length, 
       lastFetch: Date.now(),
-      CACHE_TTL: 5 * 60 * 1000
+      CACHE_TTL: ANGGOTA_CACHE_TTL
     };
     console.log(`Anggota cache refreshed: ${enriched.length} with KTA Terbit ${CURRENT_YEAR} out of ${accounts.length} total accounts`);
     return enriched;
+    })();
+
+    try {
+      return await anggotaRefreshPromise;
+    } finally {
+      anggotaRefreshPromise = null;
+    }
   } catch (err) {
     console.error('ensureAnggotaCache error:', err.message);
     return anggotaCache.data || [];
@@ -462,7 +477,8 @@ const getAnggotaForbasi = async (req, res) => {
 
 // ── Clear anggota cache (admin only) ──
 const clearAnggotaCache = async (req, res) => {
-  anggotaCache = { data: null, lastTotal: 0, lastFetch: 0, CACHE_TTL: 5 * 60 * 1000 };
+  anggotaRefreshPromise = null;
+  anggotaCache = { data: null, lastTotal: 0, lastFetch: 0, CACHE_TTL: ANGGOTA_CACHE_TTL };
   res.json({ success: true, message: 'Cache anggota berhasil di-clear, akan refresh otomatis pada request berikutnya' });
 };
 
