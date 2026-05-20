@@ -1,9 +1,10 @@
 const router = require('express').Router();
-const { getStats, getLandingData, getAnggotaForbasi, clearAnggotaCache } = require('../controllers/dashboard.controller');
+const { getStats, getLandingData, getPublicEvents, getAnggotaForbasi, clearAnggotaCache } = require('../controllers/dashboard.controller');
 const { authenticate, isAdmin } = require('../middleware/auth.middleware');
 
 // Public endpoints for landing page (no auth)
 router.get('/landing', getLandingData);
+router.get('/events', getPublicEvents);
 router.get('/anggota', getAnggotaForbasi);
 
 // Admin endpoints

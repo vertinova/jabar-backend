@@ -97,9 +97,18 @@ async function fetchForbasiAccounts(options = {}) {
     const response = await fetch(`${FORBASI_API_URL}/accounts?${params}`, {
       headers: { 'X-API-Key': FORBASI_API_KEY }
     });
+    if (!response.ok) {
+      const retryAfter = response.headers.get('retry-after');
+      throw new Error(`FORBASI accounts API error: ${response.status} ${response.statusText}${retryAfter ? ` (retry after ${retryAfter}s)` : ''}`);
+    }
+
     const result = await response.json().catch(() => null);
-    
-    if (!result || !result.success || !result.data || result.data.length === 0) {
+
+    if (!result || !result.success) {
+      throw new Error(result?.message || result?.error || 'FORBASI accounts API returned invalid response');
+    }
+
+    if (!Array.isArray(result.data) || result.data.length === 0) {
       hasMore = false;
     } else {
       allAccounts.push(...result.data);
@@ -181,8 +190,14 @@ function mapForbasiToPengcab(apiData) {
  */
 function fixForbasiFileUrl(url) {
   if (!url || typeof url !== 'string') return url;
+  let fixed = url.trim().replace(/\\/g, '/');
+
   // Upgrade http to https to prevent mixed content errors
-  let fixed = url.replace(/^http:\/\//i, 'https://');
+  fixed = fixed.replace(/^http:\/\//i, 'https://');
+  if (fixed.startsWith('//')) fixed = `https:${fixed}`;
+  if (fixed.startsWith('/forbasi/')) fixed = `https://forbasi.or.id${fixed}`;
+  if (fixed.startsWith('forbasi/')) fixed = `https://forbasi.or.id/${fixed}`;
+
   // Skip if already has /uploads/ in path
   if (fixed.includes('/uploads/')) return fixed;
   return fixed.replace(

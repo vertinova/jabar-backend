@@ -49,6 +49,30 @@ let anggotaCache = {
 // Current year for KTA filter (only show KTA issued in current year)
 const CURRENT_YEAR = new Date().getFullYear().toString(); // "2026"
 
+const firstValue = (...values) => values.find(value => typeof value === 'string' && value.trim());
+
+const getForbasiLogoUrl = (account = {}, kta = {}) => fixForbasiFileUrl(firstValue(
+  account.logo_url,
+  account.logoUrl,
+  account.logo,
+  account.club_logo_url,
+  account.clubLogoUrl,
+  account.club_logo,
+  account.clubLogo,
+  account.avatar,
+  account.photo_url,
+  account.image_url,
+  kta.logo_url,
+  kta.logoUrl,
+  kta.logo,
+  kta.club_logo_url,
+  kta.clubLogoUrl,
+  kta.club_logo,
+  kta.clubLogo,
+  kta.photo_url,
+  kta.image_url
+));
+
 // Helper: ensure anggota cache is populated
 // Auto-refresh when: TTL expired, new member detected, or force refresh
 const ensureAnggotaCache = async (forceRefresh = false) => {
@@ -63,6 +87,11 @@ const ensureAnggotaCache = async (forceRefresh = false) => {
     
     // Fetch all USER accounts from API (with pagination)
     const accounts = await fetchForbasiAccounts({ role: 'user', per_page: 200 });
+    if (!accounts.length) {
+      if (anggotaCache.data) return anggotaCache.data;
+      throw new Error('FORBASI accounts API returned empty data');
+    }
+
     const currentTotal = accounts.length;
     const hasNewData = currentTotal !== anggotaCache.lastTotal;
     
@@ -79,7 +108,7 @@ const ensureAnggotaCache = async (forceRefresh = false) => {
     for (let i = 0; i < accounts.length; i += BATCH_SIZE) {
       const batch = accounts.slice(i, i + BATCH_SIZE);
       const details = await Promise.allSettled(
-        batch.map(a => fetchForbasiAccount(a.username))
+        batch.map(a => fetchForbasiAccount(a.username || a.id))
       );
       
       details.forEach((result, idx) => {
@@ -105,7 +134,7 @@ const ensureAnggotaCache = async (forceRefresh = false) => {
           if (validKta) {
             enriched.push({
               ...account,
-              logo_url: fixForbasiFileUrl(account.logo_url || validKta.logo_url),
+              logo_url: getForbasiLogoUrl(account, validKta),
               school_name: validKta.school_name || detail.school_name || null,
               coach_name: validKta.coach_name || null,
               leader_name: validKta.leader_name || null,
@@ -290,6 +319,8 @@ const getLandingData = async (req, res) => {
         totalPengcab: pengcabList.length,
         totalUsers,
         totalClub,
+        totalAnggota: totalClub,
+        totalMembers: totalClub,
         totalEvents: mergedEvents.length + approvedEvents.length,
         kotaKabupaten: kotaSet.size || 27,
         rankingParticipants: rankingStandings.length,
@@ -311,6 +342,94 @@ const getLandingData = async (req, res) => {
 
 // ── PUBLIC Anggota FORBASI Data (no auth) ──
 // Auto-refreshes when: TTL expires, new member detected, or refresh=true
+const getPublicEvents = async (req, res) => {
+  try {
+    const [approvedEvents, openKejurda, pengdaEvents] = await Promise.all([
+      prisma.rekomendasiEvent.findMany({
+        where: { status: 'DISETUJUI', suratRekomendasi: { not: null } },
+        orderBy: { tanggalMulai: 'desc' },
+        select: {
+          id: true, namaEvent: true, jenisEvent: true,
+          tanggalMulai: true, tanggalSelesai: true,
+          lokasi: true, deskripsi: true, penyelenggara: true,
+          poster: true, suratRekomendasi: true,
+          pengcab: { select: { nama: true, kota: true } }
+        }
+      }),
+      prisma.kejurda.findMany({
+        where: { statusBuka: true, statusApproval: 'DISETUJUI' },
+        orderBy: { tanggalMulai: 'asc' },
+        select: {
+          id: true, namaKejurda: true, jenisEvent: true, targetPeserta: true,
+          tanggalMulai: true, tanggalSelesai: true,
+          lokasi: true, deskripsi: true, poster: true, suratRekomendasi: true,
+          pengcabPengaju: { select: { nama: true, kota: true } }
+        }
+      }),
+      prisma.kejurda.findMany({
+        where: { pengcabId: null, statusBuka: true },
+        orderBy: { tanggalMulai: 'asc' },
+        select: {
+          id: true, namaKejurda: true, jenisEvent: true, targetPeserta: true,
+          tanggalMulai: true, tanggalSelesai: true,
+          lokasi: true, deskripsi: true, poster: true, suratRekomendasi: true,
+        }
+      }),
+    ]);
+
+    const eventIds = new Set(openKejurda.map(e => e.id));
+    const events = [
+      ...openKejurda.map(e => ({
+        id: `k-${e.id}`,
+        sourceId: e.id,
+        name: e.namaKejurda,
+        type: e.jenisEvent,
+        targetPeserta: e.targetPeserta || 'CLUB',
+        start: e.tanggalMulai,
+        end: e.tanggalSelesai,
+        location: e.lokasi,
+        desc: e.deskripsi,
+        poster: e.poster,
+        suratRekomendasi: e.suratRekomendasi,
+        org: e.pengcabPengaju?.nama || 'Pengda Jabar',
+      })),
+      ...pengdaEvents.filter(e => !eventIds.has(e.id)).map(e => ({
+        id: `k-${e.id}`,
+        sourceId: e.id,
+        name: e.namaKejurda,
+        type: e.jenisEvent,
+        targetPeserta: e.targetPeserta || 'CLUB',
+        start: e.tanggalMulai,
+        end: e.tanggalSelesai,
+        location: e.lokasi,
+        desc: e.deskripsi,
+        poster: e.poster,
+        suratRekomendasi: e.suratRekomendasi,
+        org: 'Pengda Jabar',
+      })),
+      ...approvedEvents.map(e => ({
+        id: `r-${e.id}`,
+        sourceId: e.id,
+        name: e.namaEvent,
+        type: e.jenisEvent || 'EVENT_REGULER',
+        targetPeserta: 'INFO',
+        start: e.tanggalMulai,
+        end: e.tanggalSelesai,
+        location: e.lokasi,
+        desc: e.deskripsi,
+        poster: e.poster,
+        suratRekomendasi: e.suratRekomendasi,
+        org: e.penyelenggara || e.pengcab?.nama || '-',
+      })),
+    ].sort((a, b) => new Date(b.start) - new Date(a.start));
+
+    res.json({ success: true, total: events.length, data: events });
+  } catch (error) {
+    console.error('Public events error:', error);
+    res.status(500).json({ error: 'Gagal memuat data agenda', detail: error.message });
+  }
+};
+
 const getAnggotaForbasi = async (req, res) => {
   try {
     const { search, refresh } = req.query;
@@ -347,4 +466,4 @@ const clearAnggotaCache = async (req, res) => {
   res.json({ success: true, message: 'Cache anggota berhasil di-clear, akan refresh otomatis pada request berikutnya' });
 };
 
-module.exports = { getStats, getLandingData, getAnggotaForbasi, clearAnggotaCache };
+module.exports = { getStats, getLandingData, getPublicEvents, getAnggotaForbasi, clearAnggotaCache };
