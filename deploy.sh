@@ -43,15 +43,15 @@ deploy_backend() {
     cp package.json "$BACKEND_LIVE"/
     cp package-lock.json "$BACKEND_LIVE"/
 
-    echo "  [3/5] npm install..."
+    echo "  [3/6] npm install..."
     cd "$BACKEND_LIVE"
-    npm install --production
+    npm install
 
-    echo "  [4/6] prisma migrate deploy..."
-    npx prisma migrate deploy
-
-    echo "  [5/6] prisma generate..."
+    echo "  [4/6] prisma generate..."
     npx prisma generate
+
+    echo "  [5/6] prisma db push..."
+    npx prisma db push
 
     echo "  [6/6] pm2 restart..."
     pm2 restart jabar-backend --update-env || pm2 start src/server.js --name jabar-backend
