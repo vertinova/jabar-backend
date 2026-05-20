@@ -1,6 +1,42 @@
 const prisma = require('../lib/prisma');
 const { fetchForbasiAccounts, fetchForbasiAccount, fixForbasiFileUrl } = require('../lib/forbasi');
 
+const buildRankingStandings = (results) => {
+  const map = new Map();
+  for (const result of results) {
+    const key = result.participantKey;
+    const current = map.get(key) || {
+      participantName: result.participantName,
+      participantKey: key,
+      participantType: result.participantType,
+      origin: result.origin,
+      totalPoints: 0,
+      totalResults: 0,
+      wins: 0,
+      podiums: 0,
+      highlights: [],
+    };
+
+    current.totalPoints += result.points;
+    current.totalResults += 1;
+    if (result.rank === 1) current.wins += 1;
+    if (result.rank <= 3) current.podiums += 1;
+    if (current.highlights.length < 3) {
+      current.highlights.push({
+        eventName: result.event?.namaEvent,
+        category: result.category,
+        title: result.title,
+        points: result.points,
+      });
+    }
+    map.set(key, current);
+  }
+
+  return Array.from(map.values())
+    .sort((a, b) => b.totalPoints - a.totalPoints || b.wins - a.wins || b.podiums - a.podiums)
+    .map((item, index) => ({ ...item, position: index + 1 }));
+};
+
 // ── Smart cache for enriched anggota data ──
 // Cache invalidates when: TTL expires OR total count changes OR force refresh
 let anggotaCache = { 
@@ -240,6 +276,15 @@ const getLandingData = async (req, res) => {
     // Count unique kota/kabupaten from pengcab list
     const kotaSet = new Set(pengcabList.map(p => p.kota).filter(Boolean));
 
+    const rankingResults = await prisma.rankingResult.findMany({
+      where: { event: { status: 'DISETUJUI', suratRekomendasi: { not: null } } },
+      orderBy: [{ points: 'desc' }, { createdAt: 'desc' }],
+      include: {
+        event: { select: { id: true, namaEvent: true, tanggalMulai: true } },
+      },
+    });
+    const rankingStandings = buildRankingStandings(rankingResults).slice(0, 10);
+
     res.json({
       stats: {
         totalPengcab: pengcabList.length,
@@ -247,6 +292,7 @@ const getLandingData = async (req, res) => {
         totalClub,
         totalEvents: mergedEvents.length + approvedEvents.length,
         kotaKabupaten: kotaSet.size || 27,
+        rankingParticipants: rankingStandings.length,
       },
       pengcabList,
       kejurdaEvents: mergedEvents,
@@ -255,6 +301,7 @@ const getLandingData = async (req, res) => {
       beritaList,
       config,
       strukturList,
+      rankingStandings,
     });
   } catch (error) {
     console.error('Landing data error:', error);

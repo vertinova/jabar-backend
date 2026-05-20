@@ -17,6 +17,9 @@ const siteConfigRoutes = require('./routes/siteConfig.routes');
 const simpaskorRoutes = require('./routes/simpaskor.routes');
 const apiKeyRoutes = require('./routes/apiKey.routes');
 const externalRoutes = require('./routes/external.routes');
+const votingRoutes = require('./routes/voting.routes');
+const paymentRoutes = require('./routes/payment.routes');
+const rankingRoutes = require('./routes/ranking.routes');
 
 const app = express();
 
@@ -42,6 +45,9 @@ app.use('/api/site-config', siteConfigRoutes);
 app.use('/api/simpaskor', simpaskorRoutes);
 app.use('/api/api-keys', apiKeyRoutes);
 app.use('/api/external', externalRoutes);
+app.use('/api/voting', votingRoutes);
+app.use('/api/payments', paymentRoutes);
+app.use('/api/ranking', rankingRoutes);
 
 // Health check
 app.get('/api/health', async (req, res) => {

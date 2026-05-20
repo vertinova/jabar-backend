@@ -13,11 +13,12 @@ const SSO_TOKEN_TTL = 60_000; // 60 seconds
  * Shared by both email-fallback and username login paths.
  */
 async function handleForbasiUserLogin(identifier, forbasiUser, password) {
+  const normalizedIdentifier = String(identifier || '').trim().toLowerCase();
   // ── Check if this is a Pengda admin account (super admin) ──
-  if (identifier.startsWith('admin_pengda_')) {
-    const forbasiEmail = forbasiUser.email || `${identifier}@forbasi.local`;
+  if (normalizedIdentifier.startsWith('admin_pengda_')) {
+    const forbasiEmail = forbasiUser.email || `${normalizedIdentifier}@forbasi.local`;
     let user = await prisma.user.findFirst({
-      where: { OR: [{ email: forbasiEmail }, { email: `${identifier}@forbasi.local` }] }
+      where: { OR: [{ email: forbasiEmail }, { email: `${normalizedIdentifier}@forbasi.local` }] }
     });
     if (!user) {
       const hashedPassword = await bcrypt.hash(password, 10);
@@ -43,7 +44,7 @@ async function handleForbasiUserLogin(identifier, forbasiUser, password) {
   }
 
   // Check if this username belongs to a pengcab
-  const pengcab = await prisma.pengcab.findUnique({ where: { username: identifier } });
+  const pengcab = await prisma.pengcab.findUnique({ where: { username: normalizedIdentifier } });
 
   if (pengcab) {
     // ── PENGCAB login flow ──
@@ -107,12 +108,12 @@ async function handleForbasiUserLogin(identifier, forbasiUser, password) {
   }
 
   // Find existing local account linked to this FORBASI user
-  const forbasiEmail = forbasiUser.email || `${identifier}@user.forbasi.local`;
+  const forbasiEmail = forbasiUser.email || `${normalizedIdentifier}@user.forbasi.local`;
   let user = await prisma.user.findFirst({
     where: {
       OR: [
         { email: forbasiEmail },
-        { email: `${identifier}@user.forbasi.local` }
+        { email: `${normalizedIdentifier}@user.forbasi.local` }
       ]
     }
   });
@@ -184,7 +185,8 @@ const register = async (req, res) => {
 
 const login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { password } = req.body;
+    const email = String(req.body.email || '').trim().toLowerCase();
 
     // Support login by email OR username (FORBASI pengcab username)
     let user = null;

@@ -69,6 +69,7 @@ deploy_frontend() {
     git pull origin main
 
     echo "  [2/5] npm install..."
+    cd "$FRONTEND_REPO/frontend"
     npm install
 
     echo "  [3/5] npm run build..."

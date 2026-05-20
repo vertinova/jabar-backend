@@ -1,7 +1,6 @@
 const router = require('express').Router();
 const { authenticateApiKey, requirePermission } = require('../middleware/apiKey.middleware');
 const upload = require('../middleware/upload.middleware');
-const prisma = require('../lib/prisma');
 
 // Controllers
 const landingCtrl = require('../controllers/landingConfig.controller');
@@ -20,7 +19,7 @@ const handleUploadAny = (req, res, next) => {
   upload.any()(req, res, (err) => {
     if (err) {
       const msg = err.code === 'LIMIT_FILE_SIZE'
-        ? 'Ukuran file terlalu besar. Maksimal 10MB per file.'
+        ? 'Ukuran file terlalu besar. Maksimal 5MB per file.'
         : err.message || 'Gagal upload file';
       return res.status(400).json({ error: msg });
     }
@@ -37,7 +36,7 @@ const handlePendaftaranUpload = (req, res, next) => {
   ])(req, res, (err) => {
     if (err) {
       const msg = err.code === 'LIMIT_FILE_SIZE'
-        ? 'Ukuran file terlalu besar. Maksimal 10MB per file.'
+        ? 'Ukuran file terlalu besar. Maksimal 5MB per file.'
         : err.message || 'Gagal upload file';
       return res.status(400).json({ error: msg });
     }
@@ -167,32 +166,6 @@ router.delete('/landing/merchandise/:id', requirePermission('landing:delete'), l
 // PENGCAB
 // ══════════════════════════════════════════
 router.get('/pengcab', requirePermission('pengcab:read'), pengcabCtrl.getAll);
-
-// Lookup pengcab by username or forbasiId
-router.get('/pengcab/lookup', requirePermission('pengcab:read'), async (req, res) => {
-  try {
-    const { username, forbasiId } = req.query;
-    if (!username && !forbasiId) {
-      return res.status(400).json({ error: 'Parameter username atau forbasiId wajib diisi' });
-    }
-
-    const where = {};
-    if (username) where.username = username;
-    if (forbasiId) where.forbasiId = parseInt(forbasiId);
-
-    const pengcab = await prisma.pengcab.findFirst({
-      where,
-      select: { id: true, forbasiId: true, nama: true, kota: true, username: true, status: true },
-    });
-
-    if (!pengcab) return res.status(404).json({ error: 'Pengcab tidak ditemukan' });
-    res.json(pengcab);
-  } catch (error) {
-    console.error('Pengcab lookup error:', error);
-    res.status(500).json({ error: 'Gagal mencari pengcab' });
-  }
-});
-
 router.get('/pengcab/:id', requirePermission('pengcab:read'), pengcabCtrl.getById);
 router.post('/pengcab', requirePermission('pengcab:write'), upload.single('logo'), pengcabCtrl.create);
 router.post('/pengcab/sync-forbasi', requirePermission('pengcab:write'), pengcabCtrl.syncFromForbasi);
@@ -288,165 +261,6 @@ router.get('/api-key/info', (req, res) => {
     name: req.apiClient.name,
     permissions: req.apiClient.permissions,
   });
-});
-
-// ══════════════════════════════════════════
-// PENGCAB PANEL (for forbasi.or.id pengcab dashboard)
-// ══════════════════════════════════════════
-
-// GET /pengcab-panel/:pengcabId/dashboard
-router.get('/pengcab-panel/:pengcabId/dashboard', requirePermission('rekomendasi:read'), async (req, res) => {
-  try {
-    const pengcabId = parseInt(req.params.pengcabId);
-    if (!pengcabId) return res.status(400).json({ error: 'pengcabId tidak valid' });
-
-    const pengcab = await prisma.pengcab.findUnique({ where: { id: pengcabId } });
-    if (!pengcab) return res.status(404).json({ error: 'Pengcab tidak ditemukan' });
-
-    const [totalRekomendasi, pendingRekomendasi, approvedRekomendasi, totalPendaftaran] = await Promise.all([
-      prisma.rekomendasiEvent.count({ where: { pengcabId } }),
-      prisma.rekomendasiEvent.count({ where: { pengcabId, status: 'PENDING' } }),
-      prisma.rekomendasiEvent.count({ where: { pengcabId, status: { in: ['APPROVED_PENGCAB', 'DISETUJUI'] } } }),
-      prisma.pendaftaranKejurda.count({ where: { pengcabId } }),
-    ]);
-
-    const recentRekomendasi = await prisma.rekomendasiEvent.findMany({
-      where: { pengcabId },
-      orderBy: { createdAt: 'desc' },
-      take: 5,
-      include: { user: { select: { name: true } }, pengcab: { select: { nama: true } } }
-    });
-
-    res.json({
-      pengcab: { id: pengcab.id, nama: pengcab.nama, kota: pengcab.kota },
-      totalRekomendasi,
-      pendingRekomendasi,
-      approvedRekomendasi,
-      totalPendaftaran,
-      recentRekomendasi: recentRekomendasi.map(r => ({
-        id: r.id, namaEvent: r.namaEvent, penyelenggara: r.penyelenggara,
-        tanggalMulai: r.tanggalMulai, status: r.status,
-      })),
-    });
-  } catch (error) {
-    console.error('External pengcab dashboard error:', error);
-    res.status(500).json({ error: 'Gagal memuat dashboard pengcab' });
-  }
-});
-
-// GET /pengcab-panel/:pengcabId/rekomendasi
-router.get('/pengcab-panel/:pengcabId/rekomendasi', requirePermission('rekomendasi:read'), async (req, res) => {
-  try {
-    const pengcabId = parseInt(req.params.pengcabId);
-    if (!pengcabId) return res.status(400).json({ error: 'pengcabId tidak valid' });
-
-    const { status, search } = req.query;
-    const where = { pengcabId };
-    if (status) where.status = status;
-    if (search) {
-      where.OR = [
-        { namaEvent: { contains: search } },
-        { penyelenggara: { contains: search } },
-      ];
-    }
-
-    const items = await prisma.rekomendasiEvent.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      include: {
-        user: { select: { id: true, name: true, email: true } },
-        pengcab: { select: { id: true, nama: true, kota: true } },
-      }
-    });
-    res.json(items);
-  } catch (error) {
-    console.error('External pengcab rekomendasi error:', error);
-    res.status(500).json({ error: 'Gagal memuat rekomendasi' });
-  }
-});
-
-// GET /pengcab-panel/:pengcabId/rekomendasi/:id
-router.get('/pengcab-panel/:pengcabId/rekomendasi/:id', requirePermission('rekomendasi:read'), async (req, res) => {
-  try {
-    const pengcabId = parseInt(req.params.pengcabId);
-    const id = parseInt(req.params.id);
-
-    const item = await prisma.rekomendasiEvent.findUnique({
-      where: { id },
-      include: {
-        user: { select: { id: true, name: true, email: true, phone: true } },
-        pengcab: { select: { id: true, nama: true, kota: true } },
-      }
-    });
-    if (!item) return res.status(404).json({ error: 'Rekomendasi tidak ditemukan' });
-    if (item.pengcabId !== pengcabId) return res.status(403).json({ error: 'Akses ditolak. Event bukan dari pengcab ini.' });
-
-    res.json(item);
-  } catch (error) {
-    res.status(500).json({ error: 'Gagal memuat detail rekomendasi' });
-  }
-});
-
-// PUT /pengcab-panel/:pengcabId/rekomendasi/:id/approve
-router.put('/pengcab-panel/:pengcabId/rekomendasi/:id/approve', requirePermission('rekomendasi:write'), async (req, res) => {
-  try {
-    const pengcabId = parseInt(req.params.pengcabId);
-    const id = parseInt(req.params.id);
-
-    const item = await prisma.rekomendasiEvent.findUnique({ where: { id } });
-    if (!item) return res.status(404).json({ error: 'Rekomendasi tidak ditemukan' });
-    if (item.pengcabId !== pengcabId) return res.status(403).json({ error: 'Akses ditolak. Event bukan dari pengcab ini.' });
-    if (item.status !== 'PENDING') return res.status(400).json({ error: 'Status harus PENDING untuk disetujui' });
-
-    const updated = await prisma.rekomendasiEvent.update({
-      where: { id },
-      data: {
-        status: 'APPROVED_PENGCAB',
-        catatanPengcab: req.body?.catatan || null,
-        approvedPengcabAt: new Date(),
-      },
-      include: {
-        user: { select: { id: true, name: true, email: true } },
-        pengcab: { select: { id: true, nama: true, kota: true } },
-      }
-    });
-    res.json({ message: 'Rekomendasi disetujui pengcab', event: updated });
-  } catch (error) {
-    console.error('External approve rekomendasi error:', error);
-    res.status(500).json({ error: 'Gagal menyetujui rekomendasi' });
-  }
-});
-
-// PUT /pengcab-panel/:pengcabId/rekomendasi/:id/reject
-router.put('/pengcab-panel/:pengcabId/rekomendasi/:id/reject', requirePermission('rekomendasi:write'), async (req, res) => {
-  try {
-    const pengcabId = parseInt(req.params.pengcabId);
-    const id = parseInt(req.params.id);
-
-    const item = await prisma.rekomendasiEvent.findUnique({ where: { id } });
-    if (!item) return res.status(404).json({ error: 'Rekomendasi tidak ditemukan' });
-    if (item.pengcabId !== pengcabId) return res.status(403).json({ error: 'Akses ditolak. Event bukan dari pengcab ini.' });
-    if (item.status !== 'PENDING') return res.status(400).json({ error: 'Status harus PENDING untuk ditolak' });
-
-    const catatan = req.body?.catatan?.trim();
-    if (!catatan) return res.status(400).json({ error: 'Catatan alasan penolakan wajib diisi' });
-
-    const updated = await prisma.rekomendasiEvent.update({
-      where: { id },
-      data: {
-        status: 'DITOLAK',
-        catatanPengcab: catatan,
-      },
-      include: {
-        user: { select: { id: true, name: true, email: true } },
-        pengcab: { select: { id: true, nama: true, kota: true } },
-      }
-    });
-    res.json({ message: 'Rekomendasi ditolak', event: updated });
-  } catch (error) {
-    console.error('External reject rekomendasi error:', error);
-    res.status(500).json({ error: 'Gagal menolak rekomendasi' });
-  }
 });
 
 module.exports = router;

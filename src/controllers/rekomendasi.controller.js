@@ -175,7 +175,7 @@ const create = async (req, res) => {
 
     const event = await prisma.rekomendasiEvent.create({
       data: {
-        namaEvent: parsed.namaEvent,
+        namaEvent: parsed.namaEvent || (isDraft ? 'Draft' : ''),
         jenisEvent: parsed.jenisEvent || null,
         tanggalMulai: parsed.tanggalMulai ? new Date(parsed.tanggalMulai) : null,
         tanggalSelesai: parsed.tanggalSelesai ? new Date(parsed.tanggalSelesai) : null,
