@@ -261,29 +261,9 @@ PUT /api/external/rekomendasi/:id
 }
 ```
 
-### 5. Upload/Ganti Poster Rekomendasi
+> Catatan: upload poster manual dari dashboard FORBASI pusat disimpan sebagai override di server FORBASI pusat. API Jabar hanya menerima field `poster` pada proses buat/update rekomendasi biasa.
 
-```
-PUT /api/external/rekomendasi/:id/poster
-```
-
-**Permission:** `rekomendasi:write`
-
-**Content-Type:** `multipart/form-data`
-
-**File field:** `poster` (JPG, PNG, WEBP, atau PDF, maks 5MB)
-
-Endpoint ini hanya mengupdate field `poster` dan dapat dipakai kapan saja, termasuk setelah rekomendasi tidak lagi berstatus `DRAFT` atau `DITOLAK`.
-
-**Response:**
-```json
-{
-  "message": "Poster rekomendasi berhasil diupload",
-  "event": { ... }
-}
-```
-
-### 6. Update Status Rekomendasi (Approve/Reject)
+### 5. Update Status Rekomendasi (Approve/Reject)
 
 ```
 PATCH /api/external/rekomendasi/:id/status
