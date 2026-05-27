@@ -195,8 +195,19 @@ function fixForbasiFileUrl(url) {
   // Upgrade http to https to prevent mixed content errors
   fixed = fixed.replace(/^http:\/\//i, 'https://');
   if (fixed.startsWith('//')) fixed = `https:${fixed}`;
+  if (fixed.startsWith('/uploads/')) fixed = `https://forbasi.or.id${fixed}`;
+  if (fixed.startsWith('uploads/')) fixed = `https://forbasi.or.id/${fixed}`;
+  if (fixed.startsWith('/kta_files/')) fixed = `https://forbasi.or.id/uploads${fixed}`;
+  if (fixed.startsWith('kta_files/')) fixed = `https://forbasi.or.id/uploads/${fixed}`;
+  if (fixed.startsWith('/generated_kta')) fixed = `https://forbasi.or.id/uploads${fixed}`;
+  if (fixed.startsWith('generated_kta')) fixed = `https://forbasi.or.id/uploads/${fixed}`;
   if (fixed.startsWith('/forbasi/')) fixed = `https://forbasi.or.id${fixed}`;
   if (fixed.startsWith('forbasi/')) fixed = `https://forbasi.or.id/${fixed}`;
+
+  fixed = fixed.replace(
+    /^https:\/\/forbasi\.or\.id\/(kta_files|generated_kta|generated_kta_pb|generated_kta_pengda)\//i,
+    'https://forbasi.or.id/uploads/$1/'
+  );
 
   // Skip if already has /uploads/ in path
   if (fixed.includes('/uploads/')) return fixed;

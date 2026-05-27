@@ -51,6 +51,18 @@ const handlePelunasanUpload = (req, res, next) => {
   });
 };
 
+const handlePosterUpload = (req, res, next) => {
+  upload.single('poster')(req, res, (err) => {
+    if (err) {
+      const msg = err.code === 'LIMIT_FILE_SIZE'
+        ? 'Ukuran file poster terlalu besar. Maksimal 5MB.'
+        : err.message || 'Gagal upload poster';
+      return res.status(400).json({ error: msg });
+    }
+    next();
+  });
+};
+
 // ══════════════════════════════════════════
 // PUBLIC ROUTES (no API key needed)
 // ══════════════════════════════════════════
@@ -179,6 +191,7 @@ router.get('/rekomendasi', requirePermission('rekomendasi:read'), rekomendasiCtr
 router.get('/rekomendasi/:id', requirePermission('rekomendasi:read'), rekomendasiCtrl.getById);
 router.post('/rekomendasi', requirePermission('rekomendasi:write'), handleUploadAny, rekomendasiCtrl.create);
 router.put('/rekomendasi/:id', requirePermission('rekomendasi:write'), handleUploadAny, rekomendasiCtrl.update);
+router.put('/rekomendasi/:id/poster', requirePermission('rekomendasi:write'), handlePosterUpload, rekomendasiCtrl.uploadPoster);
 router.patch('/rekomendasi/:id/status', requirePermission('rekomendasi:write'), rekomendasiCtrl.updateStatus);
 router.post('/rekomendasi/:id/regenerate-surat', requirePermission('rekomendasi:write'), rekomendasiCtrl.regenerateSurat);
 router.delete('/rekomendasi/:id', requirePermission('rekomendasi:delete'), rekomendasiCtrl.remove);
