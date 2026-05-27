@@ -190,9 +190,9 @@ router.delete('/pengcab/:id', requirePermission('pengcab:delete'), pengcabCtrl.r
 router.get('/rekomendasi', requirePermission('rekomendasi:read'), rekomendasiCtrl.getAll);
 router.get('/rekomendasi/:id', requirePermission('rekomendasi:read'), rekomendasiCtrl.getById);
 router.post('/rekomendasi', requirePermission('rekomendasi:write'), handleUploadAny, rekomendasiCtrl.create);
-router.put('/rekomendasi/:id', requirePermission('rekomendasi:write'), handleUploadAny, rekomendasiCtrl.update);
 router.post('/rekomendasi/:id/poster', requirePermission('rekomendasi:write'), handlePosterUpload, rekomendasiCtrl.uploadPoster);
 router.put('/rekomendasi/:id/poster', requirePermission('rekomendasi:write'), handlePosterUpload, rekomendasiCtrl.uploadPoster);
+router.put('/rekomendasi/:id', requirePermission('rekomendasi:write'), handleUploadAny, rekomendasiCtrl.update);
 router.patch('/rekomendasi/:id/status', requirePermission('rekomendasi:write'), rekomendasiCtrl.updateStatus);
 router.post('/rekomendasi/:id/regenerate-surat', requirePermission('rekomendasi:write'), rekomendasiCtrl.regenerateSurat);
 router.delete('/rekomendasi/:id', requirePermission('rekomendasi:delete'), rekomendasiCtrl.remove);
