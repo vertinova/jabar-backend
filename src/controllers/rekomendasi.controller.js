@@ -1,5 +1,23 @@
 const prisma = require('../lib/prisma');
 const { generateSuratRekomendasi } = require('../lib/suratGenerator');
+const fs = require('fs');
+const path = require('path');
+
+const uploadDir = path.join(__dirname, '..', '..', 'uploads');
+
+function deleteUploadedFile(filePath) {
+  if (!filePath || typeof filePath !== 'string') return;
+  if (!filePath.startsWith('/uploads/')) return;
+
+  const fullPath = path.resolve(uploadDir, path.basename(filePath));
+  if (!fullPath.startsWith(path.resolve(uploadDir))) return;
+
+  fs.promises.unlink(fullPath).catch((error) => {
+    if (error.code !== 'ENOENT') {
+      console.warn('Gagal menghapus file upload lama:', error.message);
+    }
+  });
+}
 
 // Helper: convert month number to Roman numeral
 function toRoman(num) {
@@ -281,6 +299,51 @@ const update = async (req, res) => {
   }
 };
 
+const uploadPoster = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!id) return res.status(400).json({ error: 'ID rekomendasi tidak valid' });
+    if (!req.file) return res.status(400).json({ error: 'File poster wajib diupload' });
+
+    const posterPath = `/uploads/${req.file.filename}`;
+    const allowedPosterTypes = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+    if (!allowedPosterTypes.includes(req.file.mimetype)) {
+      deleteUploadedFile(posterPath);
+      return res.status(400).json({ error: 'Tipe file poster tidak diizinkan. Gunakan JPG, PNG, WEBP, atau PDF.' });
+    }
+    if (req.file.size > 5 * 1024 * 1024) {
+      deleteUploadedFile(posterPath);
+      return res.status(400).json({ error: 'Ukuran file poster terlalu besar. Maksimal 5MB.' });
+    }
+
+    const existing = await prisma.rekomendasiEvent.findUnique({ where: { id } });
+    if (!existing) {
+      deleteUploadedFile(posterPath);
+      return res.status(404).json({ error: 'Data rekomendasi tidak ditemukan' });
+    }
+
+    const event = await prisma.rekomendasiEvent.update({
+      where: { id },
+      data: { poster: posterPath },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+        pengcab: { select: { id: true, nama: true, kota: true } },
+      },
+    });
+
+    if (existing.poster && existing.poster !== posterPath) deleteUploadedFile(existing.poster);
+
+    res.json({
+      message: existing.poster ? 'Poster rekomendasi berhasil diganti' : 'Poster rekomendasi berhasil diupload',
+      poster: posterPath,
+      event,
+    });
+  } catch (error) {
+    console.error('Upload poster rekomendasi error:', error);
+    res.status(500).json({ error: 'Gagal upload poster rekomendasi', detail: error.message });
+  }
+};
+
 const updateStatus = async (req, res) => {
   try {
     const { status, catatanAdmin, catatanPengcab } = req.body;
@@ -419,4 +482,4 @@ const regenerateSurat = async (req, res) => {
   }
 };
 
-module.exports = { getAll, getById, create, update, updateStatus, remove, regenerateSurat };
+module.exports = { getAll, getById, create, update, uploadPoster, updateStatus, remove, regenerateSurat };
