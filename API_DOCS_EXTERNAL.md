@@ -135,7 +135,7 @@ GET /api/external/rekomendasi
 | Param | Tipe | Keterangan |
 |---|---|---|
 | `search` | string | Cari berdasarkan nama event, penyelenggara, atau lokasi |
-| `status` | string | Filter status: `DRAFT`, `PENDING`, `APPROVED_PENGCAB`, `DISETUJUI`, `DITOLAK` |
+| `status` | string | Filter status: `DRAFT`, `PENDING`, `APPROVED_PENGCAB`, `DISETUJUI`, `DITOLAK`. Jika tidak dikirim, default external API adalah `DISETUJUI`. |
 
 **Response:**
 ```json

@@ -57,7 +57,8 @@ const getAll = async (req, res) => {
         { lokasi: { contains: search } }
       ];
     }
-    if (status) where.status = status;
+    const effectiveStatus = status || (req.apiClient ? 'DISETUJUI' : null);
+    if (effectiveStatus) where.status = effectiveStatus;
 
     const events = await prisma.rekomendasiEvent.findMany({
       where,
