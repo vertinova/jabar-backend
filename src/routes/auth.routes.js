@@ -1,9 +1,8 @@
 const router = require('express').Router();
-const { register, login, resolveLoginTarget, getProfile, updateProfile, getUserDashboard, getKta, generateSsoToken, validateSsoToken } = require('../controllers/auth.controller');
+const { register, login, getProfile, updateProfile, getUserDashboard, getKta, generateSsoToken, validateSsoToken } = require('../controllers/auth.controller');
 const { authenticate } = require('../middleware/auth.middleware');
 
 router.post('/register', register);
-router.get('/login-target', resolveLoginTarget);
 router.post('/login', login);
 router.get('/profile', authenticate, getProfile);
 router.put('/profile', authenticate, updateProfile);

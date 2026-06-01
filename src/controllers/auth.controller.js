@@ -2,26 +2,11 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const prisma = require('../lib/prisma');
-const { verifyForbasiLogin, fetchForbasiAccount, fetchForbasiKta, fixForbasiFileUrl, changeForbasiPassword } = require('../lib/forbasi');
+const { verifyForbasiLogin, fetchForbasiKta, fixForbasiFileUrl, changeForbasiPassword } = require('../lib/forbasi');
 
 // In-memory SSO token store (short-lived, single-use)
 const ssoTokens = new Map();
 const SSO_TOKEN_TTL = 60_000; // 60 seconds
-
-// Pengda/Pengcab dikelola terpusat di FORBASI Pusat: login & dashboard mereka ada
-// di sana, jadi mereka TIDAK login lewat Jabar. Halaman per-role diatur oleh Pusat
-// (POST /api/auth/login-regional mengembalikan `redirect` sesuai role).
-const PUSAT_LOGIN_URL = process.env.PUSAT_LOGIN_URL || 'https://forbasi.or.id/login';
-const PUSAT_REGION = process.env.PUSAT_REGION || 'jabar';
-// role_id FORBASI: 1 anggota, 2 pengcab, 3 pengda, 4 PB, 5 penyelenggara.
-// Yang dikelola Pusat (bukan login lokal Jabar) = pengcab (2) & pengda (3).
-const PUSAT_MANAGED_ROLE_IDS = [2, 3];
-const PUSAT_MANAGED_ROLES = ['pengda', 'pengcab']; // toleransi bila API membalas string
-
-const buildPusatLoginUrl = () => {
-  const sep = PUSAT_LOGIN_URL.includes('?') ? '&' : '?';
-  return `${PUSAT_LOGIN_URL}${sep}region=${encodeURIComponent(PUSAT_REGION)}`;
-};
 
 /**
  * Handle FORBASI user login — find/create local account from FORBASI data.
@@ -195,54 +180,6 @@ const register = async (req, res) => {
     res.status(201).json({ message: 'Registrasi berhasil', user, token });
   } catch (error) {
     res.status(500).json({ error: 'Gagal registrasi', detail: error.message });
-  }
-};
-
-/**
- * Pre-auth resolver: tentukan apakah sebuah username adalah akun yang dikelola
- * Pusat (pengda/pengcab) sehingga harus login di forbasi.or.id, BUKAN di Jabar.
- * Tidak memerlukan password — hanya mengembalikan tujuan redirect.
- */
-const resolveLoginTarget = async (req, res) => {
-  try {
-    const identifier = String(req.query.username || '').trim();
-    if (!identifier) return res.json({ external: false });
-
-    // Email = akun lokal Jabar (anggota/penyelenggara/umum mendaftar via email).
-    if (identifier.includes('@')) return res.json({ external: false });
-
-    const normalized = identifier.toLowerCase();
-    const url = buildPusatLoginUrl();
-
-    // Fast-path: super admin Pengda dikenali dari konvensi username.
-    if (normalized.startsWith('admin_pengda_') || normalized.startsWith('admin_pengprov')) {
-      return res.json({ external: true, role: 'pengda', url });
-    }
-
-    // Fast-path: pengcab yang sudah tersinkron di tabel lokal.
-    const pengcab = await prisma.pengcab.findUnique({
-      where: { username: normalized },
-      select: { id: true },
-    });
-    if (pengcab) return res.json({ external: true, role: 'pengcab', url });
-
-    // Otoritatif: tanyakan role ke API FORBASI Pusat (tanpa password).
-    // Kontrak Pusat memakai role_id numerik; toleransi juga bila balas string.
-    try {
-      const account = await fetchForbasiAccount(identifier);
-      const roleId = Number(account?.role_id ?? account?.roleId);
-      const roleStr = String(account?.role || '').toLowerCase();
-      if (PUSAT_MANAGED_ROLE_IDS.includes(roleId) || PUSAT_MANAGED_ROLES.includes(roleStr)) {
-        return res.json({ external: true, role: roleStr || `role_${roleId}`, url });
-      }
-    } catch {
-      // FORBASI tidak terjangkau → biarkan alur login lokal yang memutuskan.
-    }
-
-    return res.json({ external: false });
-  } catch {
-    // Jangan pernah blokir login gara-gara resolver; default ke login lokal.
-    return res.json({ external: false });
   }
 };
 
@@ -524,4 +461,4 @@ const validateSsoToken = async (req, res) => {
   }
 };
 
-module.exports = { register, login, resolveLoginTarget, getProfile, updateProfile, getUserDashboard, getKta, generateSsoToken, validateSsoToken };
+module.exports = { register, login, getProfile, updateProfile, getUserDashboard, getKta, generateSsoToken, validateSsoToken };
