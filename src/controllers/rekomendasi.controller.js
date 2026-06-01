@@ -353,10 +353,17 @@ const updateStatus = async (req, res) => {
     const existing = await prisma.rekomendasiEvent.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Data tidak ditemukan' });
 
+    // Pengajuan E-Voting disetujui LANGSUNG oleh Pengda (lewati Pengcab total).
+    const isVotingSubmission = existing.jenisEvent === 'E-Voting';
+
     // Role-based approval flow:
     // PENGCAB: PENDING → APPROVED_PENGCAB or DITOLAK
     // ADMIN:   APPROVED_PENGCAB → DISETUJUI or DITOLAK (also can handle PENDING for backward compat)
     if (req.user.role === 'PENGCAB') {
+      // E-Voting tidak melalui pengcab — langsung ke Pengda.
+      if (isVotingSubmission) {
+        return res.status(400).json({ error: 'Pengajuan E-Voting disetujui langsung oleh Pengda, tidak melalui Pengcab' });
+      }
       // Pengcab can only approve/reject PENDING events from their pengcab
       const pengcabUser = await prisma.user.findUnique({ where: { id: req.user.id }, select: { pengcabId: true } });
       if (!pengcabUser?.pengcabId || existing.pengcabId !== pengcabUser.pengcabId) {
@@ -373,16 +380,17 @@ const updateStatus = async (req, res) => {
       if (status === 'APPROVED_PENGCAB') {
         return res.status(400).json({ error: 'Persetujuan pengcab dilakukan oleh akun pengcab, bukan admin' });
       }
-      // External API callers (e.g. FORBASI Pusat proxy) act as the authoritative
-      // Pengda approver, so they may approve directly from PENDING. The internal
-      // admin UI must still go through the pengcab review step first.
+      // Boleh setujui langsung dari PENDING jika: pemanggil eksternal (proxy FORBASI
+      // Pusat sebagai approver Pengda) ATAU pengajuan E-Voting (lewati pengcab).
+      // Selain itu, admin UI internal wajib lewat review pengcab dulu.
       const isExternal = !!req.apiClient;
-      const allowedPriorStatuses = isExternal
+      const allowDirectFromPending = isExternal || isVotingSubmission;
+      const allowedPriorStatuses = allowDirectFromPending
         ? ['PENDING', 'APPROVED_PENGCAB']
         : ['APPROVED_PENGCAB'];
       if (status === 'DISETUJUI' && !allowedPriorStatuses.includes(existing.status)) {
         return res.status(400).json({
-          error: isExternal
+          error: allowDirectFromPending
             ? 'Rekomendasi harus berstatus PENDING atau APPROVED_PENGCAB untuk disetujui'
             : 'Admin hanya bisa menyetujui event yang sudah disetujui pengcab (APPROVED_PENGCAB)',
         });

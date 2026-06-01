@@ -66,7 +66,8 @@ const getRekomendasi = async (req, res) => {
     if (!user?.pengcabId) return res.status(400).json({ error: 'Pengcab tidak ditemukan' });
 
     const items = await prisma.rekomendasiEvent.findMany({
-      where: { pengcabId: user.pengcabId },
+      // E-Voting tidak ditangani pengcab (langsung ke Pengda) → tidak ditampilkan.
+      where: { pengcabId: user.pengcabId, jenisEvent: { not: 'E-Voting' } },
       orderBy: { createdAt: 'desc' },
       include: {
         user: { select: { id: true, name: true, email: true } },
@@ -109,6 +110,7 @@ const approveRekomendasi = async (req, res) => {
     const item = await prisma.rekomendasiEvent.findUnique({ where: { id: parseInt(req.params.id) } });
     if (!item) return res.status(404).json({ error: 'Rekomendasi tidak ditemukan' });
     if (item.pengcabId !== user.pengcabId) return res.status(403).json({ error: 'Akses ditolak' });
+    if (item.jenisEvent === 'E-Voting') return res.status(400).json({ error: 'Pengajuan E-Voting disetujui langsung oleh Pengda, bukan Pengcab' });
     if (item.status !== 'PENDING') return res.status(400).json({ error: 'Status harus PENDING untuk disetujui' });
 
     const updated = await prisma.rekomendasiEvent.update({
@@ -135,6 +137,7 @@ const rejectRekomendasi = async (req, res) => {
     const item = await prisma.rekomendasiEvent.findUnique({ where: { id: parseInt(req.params.id) } });
     if (!item) return res.status(404).json({ error: 'Rekomendasi tidak ditemukan' });
     if (item.pengcabId !== user.pengcabId) return res.status(403).json({ error: 'Akses ditolak' });
+    if (item.jenisEvent === 'E-Voting') return res.status(400).json({ error: 'Pengajuan E-Voting ditangani langsung oleh Pengda, bukan Pengcab' });
     if (item.status !== 'PENDING') return res.status(400).json({ error: 'Status harus PENDING untuk ditolak' });
 
     const catatan = req.body?.catatan?.trim();
