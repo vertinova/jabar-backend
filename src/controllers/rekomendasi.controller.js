@@ -373,8 +373,19 @@ const updateStatus = async (req, res) => {
       if (status === 'APPROVED_PENGCAB') {
         return res.status(400).json({ error: 'Persetujuan pengcab dilakukan oleh akun pengcab, bukan admin' });
       }
-      if (status === 'DISETUJUI' && existing.status !== 'APPROVED_PENGCAB') {
-        return res.status(400).json({ error: 'Admin hanya bisa menyetujui event yang sudah disetujui pengcab (APPROVED_PENGCAB)' });
+      // External API callers (e.g. FORBASI Pusat proxy) act as the authoritative
+      // Pengda approver, so they may approve directly from PENDING. The internal
+      // admin UI must still go through the pengcab review step first.
+      const isExternal = !!req.apiClient;
+      const allowedPriorStatuses = isExternal
+        ? ['PENDING', 'APPROVED_PENGCAB']
+        : ['APPROVED_PENGCAB'];
+      if (status === 'DISETUJUI' && !allowedPriorStatuses.includes(existing.status)) {
+        return res.status(400).json({
+          error: isExternal
+            ? 'Rekomendasi harus berstatus PENDING atau APPROVED_PENGCAB untuk disetujui'
+            : 'Admin hanya bisa menyetujui event yang sudah disetujui pengcab (APPROVED_PENGCAB)',
+        });
       }
     } else {
       return res.status(403).json({ error: 'Akses ditolak' });
