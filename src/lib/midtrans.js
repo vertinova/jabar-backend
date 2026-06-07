@@ -1,22 +1,37 @@
 const crypto = require('crypto');
+const path = require('path');
 
-const isProduction = process.env.MIDTRANS_IS_PRODUCTION === 'true';
-const serverKey = process.env.MIDTRANS_SERVER_KEY || '';
-const clientKey = process.env.MIDTRANS_CLIENT_KEY || '';
+if (!process.env.MIDTRANS_SERVER_KEY || !process.env.MIDTRANS_CLIENT_KEY) {
+  require('dotenv').config({ path: path.resolve(__dirname, '../../.env'), quiet: true });
+}
 
-const SNAP_BASE_URL = isProduction
-  ? 'https://app.midtrans.com/snap/v1'
-  : 'https://app.sandbox.midtrans.com/snap/v1';
+const getMidtransConfig = () => ({
+  isProduction: process.env.MIDTRANS_IS_PRODUCTION === 'true',
+  serverKey: process.env.MIDTRANS_SERVER_KEY || '',
+  clientKey: process.env.MIDTRANS_CLIENT_KEY || '',
+});
 
-const CORE_BASE_URL = isProduction
-  ? 'https://api.midtrans.com/v2'
-  : 'https://api.sandbox.midtrans.com/v2';
+const getSnapBaseUrl = () =>
+  getMidtransConfig().isProduction
+    ? 'https://app.midtrans.com/snap/v1'
+    : 'https://app.sandbox.midtrans.com/snap/v1';
+
+const getCoreBaseUrl = () =>
+  getMidtransConfig().isProduction
+    ? 'https://api.midtrans.com/v2'
+    : 'https://api.sandbox.midtrans.com/v2';
 
 const QRIS_FEE_RATE = 0.007;
 
-const isMidtransConfigured = () => Boolean(serverKey && clientKey);
+const isMidtransConfigured = () => {
+  const { serverKey, clientKey } = getMidtransConfig();
+  return Boolean(serverKey && clientKey);
+};
 
-const getAuthHeader = () => `Basic ${Buffer.from(`${serverKey}:`).toString('base64')}`;
+const getAuthHeader = () => {
+  const { serverKey } = getMidtransConfig();
+  return `Basic ${Buffer.from(`${serverKey}:`).toString('base64')}`;
+};
 
 const normalizeMoney = (value) => Math.max(0, Math.round(Number(value) || 0));
 
@@ -67,7 +82,7 @@ const createSnapTransaction = async ({
     });
   }
 
-  const response = await fetch(`${SNAP_BASE_URL}/transactions`, {
+  const response = await fetch(`${getSnapBaseUrl()}/transactions`, {
     method: 'POST',
     headers: {
       Accept: 'application/json',
@@ -107,7 +122,7 @@ const getTransactionStatus = async (orderId) => {
     throw new Error('Midtrans belum dikonfigurasi');
   }
 
-  const response = await fetch(`${CORE_BASE_URL}/${encodeURIComponent(orderId)}/status`, {
+  const response = await fetch(`${getCoreBaseUrl()}/${encodeURIComponent(orderId)}/status`, {
     headers: {
       Accept: 'application/json',
       Authorization: getAuthHeader(),
@@ -121,6 +136,7 @@ const getTransactionStatus = async (orderId) => {
 };
 
 const verifySignature = ({ order_id, status_code, gross_amount, signature_key }) => {
+  const { serverKey } = getMidtransConfig();
   if (!serverKey || !signature_key) return false;
   const hash = crypto
     .createHash('sha512')
@@ -140,8 +156,8 @@ const resolvePaymentStatus = (transactionStatus, fraudStatus) => {
 };
 
 module.exports = {
-  MIDTRANS_CLIENT_KEY: clientKey,
-  MIDTRANS_IS_PRODUCTION: isProduction,
+  MIDTRANS_CLIENT_KEY: getMidtransConfig().clientKey,
+  MIDTRANS_IS_PRODUCTION: getMidtransConfig().isProduction,
   QRIS_FEE_RATE,
   calculateQrisFee,
   createSnapTransaction,
