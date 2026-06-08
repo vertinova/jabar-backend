@@ -328,7 +328,14 @@ async function createKejurcab(req, res) {
     try {
       const verifyUrl = `${SIMPASKOR_API_URL}/booking_detail.php?api_key=${encodeURIComponent(SIMPASKOR_API_KEY)}&billing_id=${encodeURIComponent(noBilingSimpaskor.trim())}`;
       const verifyResp = await fetch(verifyUrl, { method: 'GET', headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(10000) });
-      const verifyData = await verifyResp.json();
+      const verifyText = await verifyResp.text();
+      let verifyData = null;
+      try {
+        verifyData = JSON.parse(verifyText);
+      } catch {
+        console.error('Simpaskor verify non-JSON response:', verifyResp.status, verifyText.slice(0, 200));
+        return res.status(502).json({ error: 'Respons Simpaskor tidak valid. Silakan coba lagi.' });
+      }
       if (!verifyData.success || !verifyData.data) {
         return res.status(400).json({ error: 'Kode billing Simpaskor tidak valid. Pastikan nomor billing sudah benar dan terdaftar.' });
       }
@@ -337,7 +344,12 @@ async function createKejurcab(req, res) {
         return res.status(400).json({ error: `Pembayaran billing Simpaskor belum lunas (status: ${paymentStatus || 'tidak diketahui'}). Lunasi terlebih dahulu.` });
       }
     } catch (verifyErr) {
-      return res.status(502).json({ error: 'Gagal memverifikasi billing Simpaskor. Silakan coba lagi.' });
+      console.error('Kejurcab Simpaskor verify error:', verifyErr.message);
+      return res.status(502).json({
+        error: verifyErr.name === 'TimeoutError' || verifyErr.name === 'AbortError'
+          ? 'Server Simpaskor tidak merespon. Silakan coba beberapa saat lagi.'
+          : 'Gagal memverifikasi billing Simpaskor. Silakan coba lagi.'
+      });
     }
 
     // Validate: max 1 KEJURCAB per pengcab per year
