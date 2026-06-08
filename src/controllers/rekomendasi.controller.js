@@ -124,6 +124,7 @@ const getById = async (req, res) => {
 // Helper: parse form body and files into a data object
 const parseFormData = (req) => {
   const { namaEvent, jenisEvent, tanggalMulai, tanggalSelesai, lokasi, deskripsi, penyelenggara, kontakPerson, noBilingSimpaskor, pengcabId, mataLomba: mataLombaRaw, submitAction } = req.body;
+  const billingSimpaskor = typeof noBilingSimpaskor === 'string' ? noBilingSimpaskor.trim() : noBilingSimpaskor;
 
   let mataLomba = null;
   if (mataLombaRaw) {
@@ -174,7 +175,7 @@ const parseFormData = (req) => {
     }
   }
 
-  return { namaEvent, jenisEvent, tanggalMulai, tanggalSelesai, lokasi, deskripsi, penyelenggara, kontakPerson, noBilingSimpaskor, pengcabId, mataLomba, proposal, dokumenSurat, poster, persyaratan, submitAction };
+  return { namaEvent, jenisEvent, tanggalMulai, tanggalSelesai, lokasi, deskripsi, penyelenggara, kontakPerson, noBilingSimpaskor: billingSimpaskor || null, pengcabId, mataLomba, proposal, dokumenSurat, poster, persyaratan, submitAction };
 };
 
 const create = async (req, res) => {
