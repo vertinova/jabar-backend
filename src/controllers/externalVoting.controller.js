@@ -32,7 +32,11 @@ const listEvents = async (req, res) => {
         votingConfig: {
           include: {
             categories: {
-              include: { _count: { select: { nominees: true, votes: true } } },
+              orderBy: { order: 'asc' },
+              include: {
+                nominees: { orderBy: { voteCount: 'desc' } },
+                _count: { select: { nominees: true, votes: true } },
+              },
             },
           },
         },
@@ -98,7 +102,11 @@ const updateApproval = async (req, res) => {
       update: data,
       include: {
         categories: {
-          include: { _count: { select: { nominees: true, votes: true } } },
+          orderBy: { order: 'asc' },
+          include: {
+            nominees: { orderBy: { voteCount: 'desc' } },
+            _count: { select: { nominees: true, votes: true } },
+          },
         },
       },
     });

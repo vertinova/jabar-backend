@@ -378,6 +378,9 @@ Query opsional:
 | `search` | Cari nama event, penyelenggara, atau pemilik akun |
 | `approvalStatus` | Filter `PENDING`, `APPROVED`, atau `REJECTED` |
 
+Respons menyertakan data event dan akun penyelenggara, konfigurasi voting,
+status approval, persentase bagi hasil, serta kategori berikut daftar nominee.
+
 ### 2. Set Approval dan Bagi Hasil
 
 ```http
