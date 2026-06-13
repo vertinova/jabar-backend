@@ -13,6 +13,7 @@ const {
   VOTING_MAX_ADMIN_FEE,
   applyPaidVotingPurchaseVotes,
   calculateVotingAdminFee,
+  calculateVotingRevenueSplit,
 } = require('../lib/votingPayment');
 
 const optionalAuthenticate = (req, res, next) => {
@@ -33,6 +34,16 @@ const toId = (value) => {
 
 const decimalToNumber = (value) => (value === null || value === undefined ? 0 : Number(value));
 
+const normalizeVotingConfig = (config) => {
+  if (!config) return config;
+  return {
+    ...config,
+    pricePerVote: decimalToNumber(config.pricePerVote),
+    organizerSharePercent: decimalToNumber(config.organizerSharePercent),
+    pengdaSharePercent: decimalToNumber(config.pengdaSharePercent),
+  };
+};
+
 const includeConfig = {
   categories: {
     orderBy: { order: 'asc' },
@@ -47,12 +58,7 @@ const normalizeEvent = (event) => {
   if (!event) return event;
   return {
     ...event,
-    votingConfig: event.votingConfig
-      ? {
-          ...event.votingConfig,
-          pricePerVote: decimalToNumber(event.votingConfig.pricePerVote),
-        }
-      : null,
+    votingConfig: normalizeVotingConfig(event.votingConfig),
   };
 };
 
@@ -124,7 +130,14 @@ const validatePaidVotingTarget = async (eventId, categoryId, nomineeId) => {
     include: { config: true },
   });
 
-  if (!category || category.config.rekomendasiEventId !== eventId || !category.isActive || !category.config.enabled || !category.config.isPaid) {
+  if (
+    !category ||
+    category.config.rekomendasiEventId !== eventId ||
+    !category.isActive ||
+    !category.config.enabled ||
+    !category.config.isPaid ||
+    category.config.approvalStatus !== 'APPROVED'
+  ) {
     throw new Error('Kategori voting tidak tersedia');
   }
 
@@ -189,7 +202,7 @@ router.get('/events', async (req, res) => {
 
     const where = {
       status: 'DISETUJUI',
-      votingConfig: { is: { enabled: true } },
+      votingConfig: { is: { enabled: true, approvalStatus: 'APPROVED' } },
     };
 
     if (search) {
@@ -239,7 +252,11 @@ router.get('/events/:eventId', async (req, res) => {
     if (!eventId) return res.status(400).json({ error: 'ID event tidak valid' });
 
     const event = await prisma.rekomendasiEvent.findFirst({
-      where: { id: eventId, status: 'DISETUJUI', votingConfig: { is: { enabled: true } } },
+      where: {
+        id: eventId,
+        status: 'DISETUJUI',
+        votingConfig: { is: { enabled: true, approvalStatus: 'APPROVED' } },
+      },
       include: {
         votingConfig: {
           include: {
@@ -276,7 +293,12 @@ router.post('/vote', optionalAuthenticate, async (req, res) => {
       include: { config: true },
     });
 
-    if (!category || !category.isActive || !category.config.enabled) {
+    if (
+      !category ||
+      !category.isActive ||
+      !category.config.enabled ||
+      category.config.approvalStatus !== 'APPROVED'
+    ) {
       return res.status(404).json({ error: 'Kategori voting tidak tersedia' });
     }
 
@@ -347,7 +369,14 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
       include: { votingConfig: true },
     });
     const config = event?.votingConfig;
-    if (!event || event.status !== 'DISETUJUI' || !config || !config.enabled || !config.isPaid) {
+    if (
+      !event ||
+      event.status !== 'DISETUJUI' ||
+      !config ||
+      !config.enabled ||
+      !config.isPaid ||
+      config.approvalStatus !== 'APPROVED'
+    ) {
       return res.status(400).json({ error: 'Voting berbayar tidak tersedia untuk event ini' });
     }
 
@@ -362,6 +391,11 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
     const totalAmount = pricePerVote * voteCount;
     const adminFee = calculateVotingAdminFee(totalAmount, voteCount);
     const paymentAmount = totalAmount + adminFee;
+    const revenueSplit = calculateVotingRevenueSplit(
+      totalAmount,
+      config.organizerSharePercent,
+      config.pengdaSharePercent
+    );
 
     if (paymentAmount > QRIS_MAX_TRANSACTION) {
       const maxVotes = pricePerVote > 0
@@ -393,6 +427,7 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
           voteCount,
           totalAmount,
           adminFee,
+          ...revenueSplit,
           purchaseCode,
           status: totalAmount === 0 ? 'PAID' : 'PENDING',
           paidAt: totalAmount === 0 ? new Date() : null,
@@ -524,6 +559,111 @@ router.get('/admin/events', authenticate, canManageVoting, async (req, res) => {
   }
 });
 
+router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
+  try {
+    const eventWhere = req.user.role === 'ADMIN' ? {} : { userId: req.user.id };
+    const purchaseWhere = req.user.role === 'ADMIN' ? {} : { event: { userId: req.user.id } };
+    const [purchases, paidTotals, paidByEvent, events] = await Promise.all([
+      prisma.votingPurchase.findMany({
+        where: purchaseWhere,
+        orderBy: { createdAt: 'desc' },
+        take: 200,
+        include: { event: { select: { id: true, namaEvent: true } } },
+      }),
+      prisma.votingPurchase.aggregate({
+        where: { ...purchaseWhere, status: 'PAID' },
+        _sum: {
+          totalAmount: true,
+          organizerShareAmount: true,
+          pengdaShareAmount: true,
+          adminFee: true,
+          qrisFee: true,
+          voteCount: true,
+        },
+        _count: true,
+      }),
+      prisma.votingPurchase.groupBy({
+        by: ['rekomendasiEventId'],
+        where: { ...purchaseWhere, status: 'PAID' },
+        _sum: {
+          totalAmount: true,
+          organizerShareAmount: true,
+          pengdaShareAmount: true,
+          voteCount: true,
+        },
+        _count: true,
+      }),
+      prisma.rekomendasiEvent.findMany({
+        where: eventWhere,
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          namaEvent: true,
+          votingConfig: {
+            select: {
+              approvalStatus: true,
+              organizerSharePercent: true,
+              pengdaSharePercent: true,
+            },
+          },
+        },
+      }),
+    ]);
+
+    const summary = {
+      grossRevenue: decimalToNumber(paidTotals._sum.totalAmount),
+      organizerBalance: decimalToNumber(paidTotals._sum.organizerShareAmount),
+      pengdaShare: decimalToNumber(paidTotals._sum.pengdaShareAmount),
+      adminFee: decimalToNumber(paidTotals._sum.adminFee),
+      qrisFee: decimalToNumber(paidTotals._sum.qrisFee),
+      paidVotes: paidTotals._sum.voteCount || 0,
+      paidTransactions: paidTotals._count,
+    };
+
+    const paidEventMap = new Map(paidByEvent.map((item) => [item.rekomendasiEventId, item]));
+    const eventSummaries = events.map((event) => {
+      const paid = paidEventMap.get(event.id);
+      return {
+        eventId: event.id,
+        eventName: event.namaEvent,
+        approvalStatus: event.votingConfig?.approvalStatus || 'PENDING',
+        organizerSharePercent: decimalToNumber(event.votingConfig?.organizerSharePercent),
+        pengdaSharePercent: decimalToNumber(event.votingConfig?.pengdaSharePercent),
+        grossRevenue: decimalToNumber(paid?._sum.totalAmount),
+        organizerBalance: decimalToNumber(paid?._sum.organizerShareAmount),
+        pengdaShare: decimalToNumber(paid?._sum.pengdaShareAmount),
+        paidVotes: paid?._sum.voteCount || 0,
+        paidTransactions: paid?._count || 0,
+      };
+    });
+
+    res.json({
+      summary,
+      events: eventSummaries,
+      transactions: purchases.map((purchase) => ({
+        id: purchase.id,
+        purchaseCode: purchase.purchaseCode,
+        eventId: purchase.rekomendasiEventId,
+        eventName: purchase.event.namaEvent,
+        buyerName: purchase.buyerName,
+        voteCount: purchase.voteCount,
+        status: purchase.status,
+        totalAmount: decimalToNumber(purchase.totalAmount),
+        adminFee: decimalToNumber(purchase.adminFee),
+        qrisFee: decimalToNumber(purchase.qrisFee),
+        organizerSharePercent: decimalToNumber(purchase.organizerSharePercent),
+        pengdaSharePercent: decimalToNumber(purchase.pengdaSharePercent),
+        organizerShareAmount: decimalToNumber(purchase.organizerShareAmount),
+        pengdaShareAmount: decimalToNumber(purchase.pengdaShareAmount),
+        paidAt: purchase.paidAt,
+        createdAt: purchase.createdAt,
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal memuat saldo voting', detail: error.message });
+  }
+});
+
 router.get('/admin/event/:eventId/config', authenticate, canManageVoting, async (req, res) => {
   try {
     const eventId = toId(req.params.eventId);
@@ -540,7 +680,7 @@ router.get('/admin/event/:eventId/config', authenticate, canManageVoting, async 
         include: includeConfig,
       });
     }
-    res.json({ ...config, pricePerVote: decimalToNumber(config.pricePerVote) });
+    res.json(normalizeVotingConfig(config));
   } catch (error) {
     res.status(500).json({ error: 'Gagal memuat konfigurasi voting', detail: error.message });
   }
@@ -551,6 +691,16 @@ router.put('/admin/event/:eventId/config', authenticate, canManageVoting, async 
     const eventId = toId(req.params.eventId);
     if (!eventId) return res.status(400).json({ error: 'ID event tidak valid' });
     if (!(await verifyEventOwnership(req, eventId))) return res.status(403).json({ error: 'Tidak memiliki akses ke event ini' });
+
+    const existingConfig = await prisma.eventVotingConfig.findUnique({
+      where: { rekomendasiEventId: eventId },
+      select: { approvalStatus: true },
+    });
+    if (req.body.enabled && existingConfig?.approvalStatus !== 'APPROVED') {
+      return res.status(400).json({
+        error: 'E-voting belum disetujui FORBASI Pusat. Voting belum dapat diaktifkan.',
+      });
+    }
 
     const data = {
       enabled: !!req.body.enabled,
@@ -567,7 +717,7 @@ router.put('/admin/event/:eventId/config', authenticate, canManageVoting, async 
       include: includeConfig,
     });
 
-    res.json({ ...config, pricePerVote: decimalToNumber(config.pricePerVote) });
+    res.json(normalizeVotingConfig(config));
   } catch (error) {
     res.status(500).json({ error: 'Gagal menyimpan konfigurasi voting', detail: error.message });
   }
@@ -736,6 +886,9 @@ router.get('/admin/event/:eventId/results', authenticate, canManageVoting, async
       totalVotes,
       pricePerVote: decimalToNumber(config.pricePerVote),
       isPaid: config.isPaid,
+      approvalStatus: config.approvalStatus,
+      organizerSharePercent: decimalToNumber(config.organizerSharePercent),
+      pengdaSharePercent: decimalToNumber(config.pengdaSharePercent),
     });
   } catch (error) {
     res.status(500).json({ error: 'Gagal memuat hasil voting', detail: error.message });

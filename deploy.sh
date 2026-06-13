@@ -50,8 +50,8 @@ deploy_backend() {
     echo "  [4/6] prisma generate..."
     npx prisma generate
 
-    echo "  [5/6] prisma db push..."
-    npx prisma db push
+    echo "  [5/6] prisma migrate deploy..."
+    npx prisma migrate deploy
 
     echo "  [6/6] pm2 restart..."
     pm2 restart jabar-backend --update-env || pm2 start src/server.js --name jabar-backend

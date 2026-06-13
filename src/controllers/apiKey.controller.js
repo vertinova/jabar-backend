@@ -47,6 +47,7 @@ const createApiKey = async (req, res) => {
       'dashboard:read', 'dashboard:write',
       'dokumen:read', 'dokumen:write', 'dokumen:delete',
       'config:read', 'config:write',
+      'voting:read', 'voting:write',
     ];
     const perms = (permissions || ['landing:read']).filter(p => validPermissions.includes(p));
 
@@ -98,6 +99,7 @@ const updateApiKey = async (req, res) => {
         'dashboard:read', 'dashboard:write',
         'dokumen:read', 'dokumen:write', 'dokumen:delete',
         'config:read', 'config:write',
+        'voting:read', 'voting:write',
       ];
       data.permissions = permissions.filter(p => validPermissions.includes(p));
     }

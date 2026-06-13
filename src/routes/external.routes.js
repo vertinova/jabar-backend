@@ -13,6 +13,7 @@ const dashboardCtrl = require('../controllers/dashboard.controller');
 const kategoriCtrl = require('../controllers/kategoriEvent.controller');
 const formatDokumenCtrl = require('../controllers/formatDokumen.controller');
 const siteConfigCtrl = require('../controllers/siteConfig.controller');
+const externalVotingCtrl = require('../controllers/externalVoting.controller');
 
 // Wrap multer.any() for rekomendasi-style uploads
 const handleUploadAny = (req, res, next) => {
@@ -196,6 +197,10 @@ router.put('/rekomendasi/:id', requirePermission('rekomendasi:write'), handleUpl
 router.patch('/rekomendasi/:id/status', requirePermission('rekomendasi:write'), rekomendasiCtrl.updateStatus);
 router.post('/rekomendasi/:id/regenerate-surat', requirePermission('rekomendasi:write'), rekomendasiCtrl.regenerateSurat);
 router.delete('/rekomendasi/:id', requirePermission('rekomendasi:delete'), rekomendasiCtrl.remove);
+
+// E-voting approval and revenue share from FORBASI Pusat
+router.get('/voting/events', requirePermission('voting:read'), externalVotingCtrl.listEvents);
+router.patch('/voting/events/:eventId/approval', requirePermission('voting:write'), externalVotingCtrl.updateApproval);
 
 // ══════════════════════════════════════════
 // KEJURDA / EVENT

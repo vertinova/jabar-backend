@@ -8,6 +8,20 @@ const calculateVotingAdminFee = (totalAmount, voteCount) => {
   return Math.min(VOTING_ADMIN_FEE_PER_VOTE * votes, VOTING_MAX_ADMIN_FEE);
 };
 
+const calculateVotingRevenueSplit = (totalAmount, organizerSharePercent, pengdaSharePercent) => {
+  const amount = Math.max(0, Math.round(Number(totalAmount) || 0));
+  const organizerPercent = Number(organizerSharePercent) || 0;
+  const pengdaPercent = Number(pengdaSharePercent) || 0;
+  const organizerAmount = Math.round((amount * organizerPercent) / 100);
+
+  return {
+    organizerSharePercent: organizerPercent,
+    pengdaSharePercent: pengdaPercent,
+    organizerShareAmount: organizerAmount,
+    pengdaShareAmount: Math.max(0, amount - organizerAmount),
+  };
+};
+
 const applyPaidVotingPurchaseVotes = async (tx, purchaseId, voterIp = '') => {
   const purchase = await tx.votingPurchase.findUnique({
     where: { id: purchaseId },
@@ -55,5 +69,6 @@ module.exports = {
   VOTING_ADMIN_FEE_PER_VOTE,
   VOTING_MAX_ADMIN_FEE,
   calculateVotingAdminFee,
+  calculateVotingRevenueSplit,
   applyPaidVotingPurchaseVotes,
 };

@@ -38,21 +38,21 @@ enum Role {
 
 // ==================== PENGCAB ====================
 model Pengcab {
-  id          Int      @id @default(autoincrement())
-  forbasiId   Int?     @unique
-  nama        String
-  kota        String
-  ketua       String   @default("Belum ditentukan")
-  sekretaris  String?
-  bendahara   String?
-  alamat      String?  @db.Text
-  phone       String?
-  email       String?
-  logo        String?
-  username    String?  @unique
-  status      StatusAktif @default(AKTIF)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id         Int         @id @default(autoincrement())
+  forbasiId  Int?        @unique
+  nama       String
+  kota       String
+  ketua      String      @default("Belum ditentukan")
+  sekretaris String?
+  bendahara  String?
+  alamat     String?     @db.Text
+  phone      String?
+  email      String?
+  logo       String?
+  username   String?     @unique
+  status     StatusAktif @default(AKTIF)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
 
   users              User[]
   rekomendasiEvents  RekomendasiEvent[]
@@ -69,35 +69,35 @@ enum StatusAktif {
 
 // ==================== REKOMENDASI EVENT ====================
 model RekomendasiEvent {
-  id              Int            @id @default(autoincrement())
-  namaEvent       String
-  jenisEvent      String?
-  tanggalMulai    DateTime?
-  tanggalSelesai  DateTime?
-  lokasi          String?
-  deskripsi       String?        @db.Text
-  penyelenggara   String?
-  kontakPerson    String?
+  id                Int            @id @default(autoincrement())
+  namaEvent         String
+  jenisEvent        String?
+  tanggalMulai      DateTime?
+  tanggalSelesai    DateTime?
+  lokasi            String?
+  deskripsi         String?        @db.Text
+  penyelenggara     String?
+  kontakPerson      String?
   noBilingSimpaskor String?
-  dokumenSurat    String?
-  persyaratan     Json?          // Stores all persyaratan data (checkboxes, text, file paths)
-  mataLomba       Json?          // Stores mata lomba selections with individual schedules
-  proposal        String?        // File path for uploaded proposal kegiatan document
-  poster          String?        // File path for event poster/pamphlet
-  status          StatusApproval @default(DRAFT)
-  catatanPengcab  String?        @db.Text
-  catatanAdmin    String?        @db.Text
+  dokumenSurat      String?
+  persyaratan       Json? // Stores all persyaratan data (checkboxes, text, file paths)
+  mataLomba         Json? // Stores mata lomba selections with individual schedules
+  proposal          String? // File path for uploaded proposal kegiatan document
+  poster            String? // File path for event poster/pamphlet
+  status            StatusApproval @default(DRAFT)
+  catatanPengcab    String?        @db.Text
+  catatanAdmin      String?        @db.Text
   approvedPengcabAt DateTime?
   approvedPengdaAt  DateTime?
-  nomorSurat        String?      // Auto-generated: UM.001/FORBASI-JABAR/II/2026
-  suratRekomendasi  String?      // Path to generated surat rekomendasi PDF
-  userId          Int
-  pengcabId       Int?
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  nomorSurat        String? // Auto-generated: UM.001/FORBASI-JABAR/II/2026
+  suratRekomendasi  String? // Path to generated surat rekomendasi PDF
+  userId            Int
+  pengcabId         Int?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
 
-  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  pengcab Pengcab? @relation(fields: [pengcabId], references: [id], onDelete: SetNull)
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pengcab         Pengcab?           @relation(fields: [pengcabId], references: [id], onDelete: SetNull)
   votingConfig    EventVotingConfig?
   votingPurchases VotingPurchase[]
   rankingResults  RankingResult[]
@@ -126,6 +126,12 @@ enum VotingPurchaseStatus {
   CANCELLED
 }
 
+enum VotingApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 // ==================== RANKING PRESTASI ====================
 model RankingResult {
   id                 Int              @id @default(autoincrement())
@@ -151,15 +157,20 @@ model RankingResult {
 }
 
 model EventVotingConfig {
-  id                 Int       @id @default(autoincrement())
-  rekomendasiEventId Int       @unique @map("rekomendasi_event_id")
-  enabled            Boolean   @default(false)
-  isPaid             Boolean   @default(false) @map("is_paid")
-  pricePerVote       Decimal   @default(0) @db.Decimal(12, 2) @map("price_per_vote")
-  startDate          DateTime? @map("start_date")
-  endDate            DateTime? @map("end_date")
-  createdAt          DateTime  @default(now()) @map("created_at")
-  updatedAt          DateTime  @updatedAt @map("updated_at")
+  id                    Int                  @id @default(autoincrement())
+  rekomendasiEventId    Int                  @unique @map("rekomendasi_event_id")
+  enabled               Boolean              @default(false)
+  isPaid                Boolean              @default(false) @map("is_paid")
+  pricePerVote          Decimal              @default(0) @map("price_per_vote") @db.Decimal(12, 2)
+  approvalStatus        VotingApprovalStatus @default(PENDING) @map("approval_status")
+  organizerSharePercent Decimal              @default(0) @map("organizer_share_percent") @db.Decimal(5, 2)
+  pengdaSharePercent    Decimal              @default(0) @map("pengda_share_percent") @db.Decimal(5, 2)
+  approvalNote          String?              @map("approval_note") @db.Text
+  approvedAt            DateTime?            @map("approved_at")
+  startDate             DateTime?            @map("start_date")
+  endDate               DateTime?            @map("end_date")
+  createdAt             DateTime             @default(now()) @map("created_at")
+  updatedAt             DateTime             @updatedAt @map("updated_at")
 
   event      RekomendasiEvent @relation(fields: [rekomendasiEventId], references: [id], onDelete: Cascade)
   categories VotingCategory[]
@@ -225,28 +236,32 @@ model VotingVote {
 }
 
 model VotingPurchase {
-  id                 Int                  @id @default(autoincrement())
-  rekomendasiEventId Int                  @map("rekomendasi_event_id")
-  event              RekomendasiEvent     @relation(fields: [rekomendasiEventId], references: [id], onDelete: Cascade)
-  buyerName          String               @map("buyer_name")
-  buyerEmail         String               @map("buyer_email")
-  buyerPhone         String?              @map("buyer_phone")
-  categoryId         Int?                 @map("category_id")
-  nomineeId          Int?                 @map("nominee_id")
-  voteCount          Int                  @default(1) @map("vote_count")
-  totalAmount        Decimal              @db.Decimal(12, 2) @map("total_amount")
-  adminFee           Decimal              @default(0) @db.Decimal(12, 2) @map("admin_fee")
-  qrisFee            Decimal              @default(0) @db.Decimal(12, 2) @map("qris_fee")
-  grossAmount        Decimal?             @db.Decimal(12, 2) @map("gross_amount")
-  purchaseCode       String               @unique @map("purchase_code")
-  status             VotingPurchaseStatus @default(PENDING)
-  midtransOrderId    String?              @unique @map("midtrans_order_id")
-  snapToken          String?              @map("snap_token")
-  paymentType        String?              @map("payment_type")
-  paidAt             DateTime?            @map("paid_at")
-  usedVotes          Int                  @default(0) @map("used_votes")
-  createdAt          DateTime             @default(now()) @map("created_at")
-  updatedAt          DateTime             @updatedAt @map("updated_at")
+  id                    Int                  @id @default(autoincrement())
+  rekomendasiEventId    Int                  @map("rekomendasi_event_id")
+  event                 RekomendasiEvent     @relation(fields: [rekomendasiEventId], references: [id], onDelete: Cascade)
+  buyerName             String               @map("buyer_name")
+  buyerEmail            String               @map("buyer_email")
+  buyerPhone            String?              @map("buyer_phone")
+  categoryId            Int?                 @map("category_id")
+  nomineeId             Int?                 @map("nominee_id")
+  voteCount             Int                  @default(1) @map("vote_count")
+  totalAmount           Decimal              @map("total_amount") @db.Decimal(12, 2)
+  adminFee              Decimal              @default(0) @map("admin_fee") @db.Decimal(12, 2)
+  qrisFee               Decimal              @default(0) @map("qris_fee") @db.Decimal(12, 2)
+  grossAmount           Decimal?             @map("gross_amount") @db.Decimal(12, 2)
+  purchaseCode          String               @unique @map("purchase_code")
+  status                VotingPurchaseStatus @default(PENDING)
+  midtransOrderId       String?              @unique @map("midtrans_order_id")
+  snapToken             String?              @map("snap_token")
+  paymentType           String?              @map("payment_type")
+  paidAt                DateTime?            @map("paid_at")
+  usedVotes             Int                  @default(0) @map("used_votes")
+  organizerSharePercent Decimal              @default(0) @map("organizer_share_percent") @db.Decimal(5, 2)
+  pengdaSharePercent    Decimal              @default(0) @map("pengda_share_percent") @db.Decimal(5, 2)
+  organizerShareAmount  Decimal              @default(0) @map("organizer_share_amount") @db.Decimal(12, 2)
+  pengdaShareAmount     Decimal              @default(0) @map("pengda_share_amount") @db.Decimal(12, 2)
+  createdAt             DateTime             @default(now()) @map("created_at")
+  updatedAt             DateTime             @updatedAt @map("updated_at")
 
   votes VotingVote[]
 
@@ -261,13 +276,13 @@ model VotingPurchase {
 // ==================== KEJURDA ====================
 
 model KategoriEvent {
-  id     Int     @id @default(autoincrement())
-  kode   String  @unique // e.g. KEJURDA, LATGAB, TOT
-  nama   String  // Display name, editable
-  warna  String  @default("green") // Tailwind color key
-  grup   String  @default("kegiatan") // kompetisi | kegiatan
-  urutan Int     @default(0)
-  aktif  Boolean @default(true)
+  id        Int      @id @default(autoincrement())
+  kode      String   @unique // e.g. KEJURDA, LATGAB, TOT
+  nama      String // Display name, editable
+  warna     String   @default("green") // Tailwind color key
+  grup      String   @default("kegiatan") // kompetisi | kegiatan
+  urutan    Int      @default(0)
+  aktif     Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -275,36 +290,36 @@ model KategoriEvent {
 }
 
 model Kejurda {
-  id             Int      @id @default(autoincrement())
-  namaKejurda    String
-  jenisEvent     String   @default("KEJURDA") // KEJURDA, KEJURCAB, EVENT_REGULER
-  targetPeserta  TargetPeserta @default(CLUB) // CLUB = via akun club, UMUM = via landing page
-  tanggalMulai   DateTime
-  tanggalSelesai DateTime
-  lokasi         String
-  deskripsi      String?  @db.Text
-  poster         String?
-  statusBuka     Boolean  @default(true)
-  earlyBirdAktif Boolean  @default(true)
-  pengcabId      Int?
-  statusApproval String   @default("DISETUJUI") // PENDING, DISETUJUI, DITOLAK
-  catatanAdmin   String?  @db.Text
-  biayaPendaftaran Decimal? @db.Decimal(12, 2)
-  batasPendaftaran DateTime?
-  kontakPerson   String?
-  kontakPhone    String?
+  id                Int           @id @default(autoincrement())
+  namaKejurda       String
+  jenisEvent        String        @default("KEJURDA") // KEJURDA, KEJURCAB, EVENT_REGULER
+  targetPeserta     TargetPeserta @default(CLUB) // CLUB = via akun club, UMUM = via landing page
+  tanggalMulai      DateTime
+  tanggalSelesai    DateTime
+  lokasi            String
+  deskripsi         String?       @db.Text
+  poster            String?
+  statusBuka        Boolean       @default(true)
+  earlyBirdAktif    Boolean       @default(true)
+  pengcabId         Int?
+  statusApproval    String        @default("DISETUJUI") // PENDING, DISETUJUI, DITOLAK
+  catatanAdmin      String?       @db.Text
+  biayaPendaftaran  Decimal?      @db.Decimal(12, 2)
+  batasPendaftaran  DateTime?
+  kontakPerson      String?
+  kontakPhone       String?
   noBilingSimpaskor String?
-  persyaratan    Json?
-  mataLomba      Json?
-  proposal       String?
-  nomorSurat        String?      // Auto-generated: UM.001/FORBASI-JABAR/II/2026
-  suratRekomendasi  String?      // Path to generated surat rekomendasi PDF
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  persyaratan       Json?
+  mataLomba         Json?
+  proposal          String?
+  nomorSurat        String? // Auto-generated: UM.001/FORBASI-JABAR/II/2026
+  suratRekomendasi  String? // Path to generated surat rekomendasi PDF
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
 
   pendaftaran       PendaftaranKejurda[]
   persyaratanFields PersyaratanField[]
-  pengcabPengaju    Pengcab? @relation(fields: [pengcabId], references: [id], onDelete: SetNull)
+  pengcabPengaju    Pengcab?             @relation(fields: [pengcabId], references: [id], onDelete: SetNull)
 
   @@map("kejurda")
 }
@@ -316,17 +331,17 @@ enum TargetPeserta {
 
 // ==================== DYNAMIC FORM FIELDS ====================
 model PersyaratanField {
-  id         Int      @id @default(autoincrement())
+  id         Int       @id @default(autoincrement())
   kejurdaId  Int
-  label      String   // Field label e.g., "Foto KTP", "Surat Keterangan Sehat"
+  label      String // Field label e.g., "Foto KTP", "Surat Keterangan Sehat"
   tipe       TipeField @default(TEXT)
-  required   Boolean  @default(true)
-  options    Json?    // For SELECT/RADIO: ["Option 1", "Option 2"]
-  keterangan String?  @db.Text // Helper text
-  urutan     Int      @default(0)
-  aktif      Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  required   Boolean   @default(true)
+  options    Json? // For SELECT/RADIO: ["Option 1", "Option 2"]
+  keterangan String?   @db.Text // Helper text
+  urutan     Int       @default(0)
+  aktif      Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   kejurda Kejurda @relation(fields: [kejurdaId], references: [id], onDelete: Cascade)
 
@@ -349,13 +364,13 @@ enum TipeField {
 model PendaftaranKejurda {
   id              Int            @id @default(autoincrement())
   kejurdaId       Int
-  userId          Int?           // Nullable for UMUM registration without login
+  userId          Int? // Nullable for UMUM registration without login
   pengcabId       Int?
   namaAtlet       String
   kategori        String
   kelasTanding    String?
   dokumen         String?
-  dataPersyaratan Json?          // Stores dynamic form submissions: { fieldId: value, ... }
+  dataPersyaratan Json? // Stores dynamic form submissions: { fieldId: value, ... }
   status          StatusApproval @default(PENDING)
   catatanAdmin    String?        @db.Text
   catatanPeserta  String?        @db.Text
@@ -366,9 +381,9 @@ model PendaftaranKejurda {
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
-  kejurda  Kejurda  @relation(fields: [kejurdaId], references: [id], onDelete: Cascade)
-  user     User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  pengcab  Pengcab? @relation(fields: [pengcabId], references: [id], onDelete: SetNull)
+  kejurda Kejurda  @relation(fields: [kejurdaId], references: [id], onDelete: Cascade)
+  user    User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pengcab Pengcab? @relation(fields: [pengcabId], references: [id], onDelete: SetNull)
 
   @@map("pendaftaran_kejurda")
 }
@@ -376,7 +391,7 @@ model PendaftaranKejurda {
 // ==================== LANDING PAGE CONFIG ====================
 model HeroSlide {
   id        Int      @id @default(autoincrement())
-  gambar    String   // path to image file
+  gambar    String // path to image file
   caption   String?
   urutan    Int      @default(0)
   aktif     Boolean  @default(true)
@@ -423,12 +438,12 @@ model SiteConfig {
 // ==================== FORMAT DOKUMEN (TEMPLATE DOWNLOAD) ====================
 model FormatDokumen {
   id        Int      @id @default(autoincrement())
-  nama      String          // Display name e.g. "Pakta Integritas"
-  deskripsi String?         // Short description
-  filePath  String          // Path to the file in uploads/
-  kategori  String  @default("umum") // umum, administratif, perangkat, etc.
-  urutan    Int     @default(0)
-  aktif     Boolean @default(true)
+  nama      String // Display name e.g. "Pakta Integritas"
+  deskripsi String? // Short description
+  filePath  String // Path to the file in uploads/
+  kategori  String   @default("umum") // umum, administratif, perangkat, etc.
+  urutan    Int      @default(0)
+  aktif     Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -437,9 +452,9 @@ model FormatDokumen {
 
 model StrukturOrganisasi {
   id        Int      @id @default(autoincrement())
-  jabatan   String   // e.g., "Ketua Umum", "Sekretaris", "Bendahara", "Seksi Humas"
+  jabatan   String // e.g., "Ketua Umum", "Sekretaris", "Bendahara", "Seksi Humas"
   nama      String
-  foto      String?  // path to photo
+  foto      String? // path to photo
   urutan    Int      @default(0)
   aktif     Boolean  @default(true)
   createdAt DateTime @default(now())
@@ -450,16 +465,16 @@ model StrukturOrganisasi {
 
 // ==================== MERCHANDISE ====================
 model Merchandise {
-  id          Int      @id @default(autoincrement())
-  nama        String
-  deskripsi   String?  @db.Text
-  harga       Decimal? @db.Decimal(12, 2)
-  gambar      String?
-  link        String?  // External purchase link
-  urutan      Int      @default(0)
-  aktif       Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        Int      @id @default(autoincrement())
+  nama      String
+  deskripsi String?  @db.Text
+  harga     Decimal? @db.Decimal(12, 2)
+  gambar    String?
+  link      String? // External purchase link
+  urutan    Int      @default(0)
+  aktif     Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("merchandise")
 }
@@ -467,10 +482,10 @@ model Merchandise {
 // ==================== API KEYS (Remote Access) ====================
 model ApiKey {
   id          Int       @id @default(autoincrement())
-  name        String    // e.g. "FORBASI Pusat"
+  name        String // e.g. "FORBASI Pusat"
   keyHash     String    @unique // SHA-256 hash of the actual key
-  keyPrefix   String    // First 8 chars for display: "sk_ab12..."
-  permissions Json      // JSON array: ["landing:read","landing:write","landing:delete"]
+  keyPrefix   String // First 8 chars for display: "sk_ab12..."
+  permissions Json // JSON array: ["landing:read","landing:write","landing:delete"]
   active      Boolean   @default(true)
   lastUsedAt  DateTime?
   createdAt   DateTime  @default(now())
@@ -482,14 +497,14 @@ model ApiKey {
 }
 
 model ApiKeyLog {
-  id        Int      @id @default(autoincrement())
-  apiKeyId  Int
-  endpoint  String
-  method    String
-  ip        String?
-  userAgent String?  @db.Text
+  id         Int      @id @default(autoincrement())
+  apiKeyId   Int
+  endpoint   String
+  method     String
+  ip         String?
+  userAgent  String?  @db.Text
   statusCode Int?
-  createdAt DateTime @default(now())
+  createdAt  DateTime @default(now())
 
   apiKey ApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
 

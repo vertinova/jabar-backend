@@ -59,6 +59,8 @@ GET /api/external/api-key/info
 | `dokumen:delete` | Hapus format dokumen |
 | `config:read` | Lihat site config |
 | `config:write` | Update site config |
+| `voting:read` | Lihat pengajuan dan konfigurasi e-voting |
+| `voting:write` | Setujui/tolak e-voting dan tentukan bagi hasil |
 
 ### Error Responses
 
@@ -353,6 +355,52 @@ DELETE /api/external/rekomendasi/:id
   "message": "Data rekomendasi berhasil dihapus"
 }
 ```
+
+---
+
+## E-VOTING
+
+Endpoint ini dipakai FORBASI Pusat untuk menampilkan pengajuan e-voting Pengda Jabar,
+memberikan persetujuan, dan menetapkan persentase bagi hasil.
+
+### 1. Get Pengajuan E-Voting
+
+```http
+GET /api/external/voting/events
+```
+
+**Permission:** `voting:read`
+
+Query opsional:
+
+| Query | Keterangan |
+|---|---|
+| `search` | Cari nama event, penyelenggara, atau pemilik akun |
+| `approvalStatus` | Filter `PENDING`, `APPROVED`, atau `REJECTED` |
+
+### 2. Set Approval dan Bagi Hasil
+
+```http
+PATCH /api/external/voting/events/:eventId/approval
+Content-Type: application/json
+```
+
+**Permission:** `voting:write`
+
+```json
+{
+  "approvalStatus": "APPROVED",
+  "organizerSharePercent": 70,
+  "pengdaSharePercent": 30,
+  "approvalNote": "Disetujui untuk periode event berjalan"
+}
+```
+
+Ketentuan:
+
+- Saat `APPROVED`, total `organizerSharePercent` dan `pengdaSharePercent` wajib 100%.
+- Saat status diubah menjadi `PENDING` atau `REJECTED`, voting otomatis dinonaktifkan.
+- Persentase disimpan sebagai snapshot pada setiap pembelian vote agar histori saldo tidak berubah saat persentase berikutnya diperbarui.
 
 ---
 
