@@ -12,16 +12,23 @@ const getDashboard = async (req, res) => {
       return res.status(400).json({ error: 'Pengcab tidak ditemukan untuk user ini' });
     }
     const pengcabId = user.pengcabId;
+    const recommendationWhere = {
+      pengcabId,
+      OR: [
+        { jenisEvent: null },
+        { jenisEvent: { not: 'E-Voting' } },
+      ],
+    };
 
     const [totalRekomendasi, pendingRekomendasi, approvedRekomendasi, totalPendaftaran] = await Promise.all([
-      prisma.rekomendasiEvent.count({ where: { pengcabId } }),
-      prisma.rekomendasiEvent.count({ where: { pengcabId, status: 'PENDING' } }),
-      prisma.rekomendasiEvent.count({ where: { pengcabId, status: { in: ['APPROVED_PENGCAB', 'DISETUJUI'] } } }),
+      prisma.rekomendasiEvent.count({ where: recommendationWhere }),
+      prisma.rekomendasiEvent.count({ where: { ...recommendationWhere, status: 'PENDING' } }),
+      prisma.rekomendasiEvent.count({ where: { ...recommendationWhere, status: { in: ['APPROVED_PENGCAB', 'DISETUJUI'] } } }),
       prisma.pendaftaranKejurda.count({ where: { pengcabId } }),
     ]);
 
     const recentRekomendasi = await prisma.rekomendasiEvent.findMany({
-      where: { pengcabId },
+      where: recommendationWhere,
       orderBy: { createdAt: 'desc' },
       take: 5,
       include: { user: { select: { name: true } }, pengcab: { select: { nama: true } } }
@@ -67,7 +74,13 @@ const getRekomendasi = async (req, res) => {
 
     const items = await prisma.rekomendasiEvent.findMany({
       // E-Voting tidak ditangani pengcab (langsung ke Pengda) → tidak ditampilkan.
-      where: { pengcabId: user.pengcabId, jenisEvent: { not: 'E-Voting' } },
+      where: {
+        pengcabId: user.pengcabId,
+        OR: [
+          { jenisEvent: null },
+          { jenisEvent: { not: 'E-Voting' } },
+        ],
+      },
       orderBy: { createdAt: 'desc' },
       include: {
         user: { select: { id: true, name: true, email: true } },

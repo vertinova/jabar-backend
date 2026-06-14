@@ -12,7 +12,7 @@ const normalizeConfig = (config) => config ? {
 const listEvents = async (req, res) => {
   try {
     const { search = '', approvalStatus } = req.query;
-    const where = {};
+    const where = { votingConfig: { isNot: null } };
     if (search) {
       where.OR = [
         { namaEvent: { contains: search } },
@@ -65,9 +65,9 @@ const updateApproval = async (req, res) => {
 
     const event = await prisma.rekomendasiEvent.findUnique({
       where: { id: eventId },
-      select: { id: true, namaEvent: true },
+      select: { id: true, namaEvent: true, votingConfig: { select: { id: true } } },
     });
-    if (!event) return res.status(404).json({ error: 'Event tidak ditemukan' });
+    if (!event?.votingConfig) return res.status(404).json({ error: 'Pengajuan vote tidak ditemukan' });
 
     const organizerSharePercent = Number(req.body.organizerSharePercent);
     const pengdaSharePercent = Number(req.body.pengdaSharePercent);

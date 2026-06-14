@@ -543,9 +543,87 @@ router.post('/payment-status', optionalAuthenticate, async (req, res) => {
   }
 });
 
+router.post('/admin/events', authenticate, canManageVoting, async (req, res) => {
+  try {
+    const title = String(req.body.title || '').trim();
+    const description = String(req.body.description || '').trim();
+    const location = String(req.body.location || '').trim();
+    const startDate = req.body.startDate ? new Date(req.body.startDate) : null;
+    const endDate = req.body.endDate ? new Date(req.body.endDate) : null;
+
+    if (!title) return res.status(400).json({ error: 'Judul vote wajib diisi' });
+    if (title.length > 191) return res.status(400).json({ error: 'Judul vote maksimal 191 karakter' });
+    if (location.length > 191) return res.status(400).json({ error: 'Lokasi maksimal 191 karakter' });
+    if (startDate && Number.isNaN(startDate.getTime())) {
+      return res.status(400).json({ error: 'Tanggal mulai tidak valid' });
+    }
+    if (endDate && Number.isNaN(endDate.getTime())) {
+      return res.status(400).json({ error: 'Tanggal selesai tidak valid' });
+    }
+    if (startDate && endDate && endDate <= startDate) {
+      return res.status(400).json({ error: 'Tanggal selesai harus setelah tanggal mulai' });
+    }
+
+    const owner = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { id: true, name: true, phone: true, pengcabId: true },
+    });
+    if (!owner) return res.status(404).json({ error: 'Akun penyelenggara tidak ditemukan' });
+
+    const event = await prisma.$transaction(async (tx) => {
+      const createdEvent = await tx.rekomendasiEvent.create({
+        data: {
+          namaEvent: title,
+          jenisEvent: 'E-Voting',
+          tanggalMulai: startDate,
+          tanggalSelesai: endDate,
+          lokasi: location || null,
+          deskripsi: description || null,
+          penyelenggara: owner.name,
+          kontakPerson: owner.phone,
+          status: 'DISETUJUI',
+          userId: owner.id,
+          pengcabId: owner.pengcabId,
+        },
+      });
+
+      await tx.eventVotingConfig.create({
+        data: {
+          rekomendasiEventId: createdEvent.id,
+          startDate,
+          endDate,
+          approvalStatus: 'PENDING',
+        },
+      });
+
+      return tx.rekomendasiEvent.findUnique({
+        where: { id: createdEvent.id },
+        include: {
+          votingConfig: {
+            include: {
+              categories: {
+                include: { _count: { select: { nominees: true, votes: true } } },
+              },
+            },
+          },
+        },
+      });
+    });
+
+    res.status(201).json({
+      message: 'Vote berhasil dibuat dan diajukan ke FORBASI Pusat',
+      event: normalizeEvent(event),
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal membuat vote', detail: error.message });
+  }
+});
+
 router.get('/admin/events', authenticate, canManageVoting, async (req, res) => {
   try {
-    const where = req.user.role === 'ADMIN' ? {} : { userId: req.user.id };
+    const where = req.user.role === 'ADMIN'
+      ? { votingConfig: { isNot: null } }
+      : { userId: req.user.id, votingConfig: { isNot: null } };
     const events = await prisma.rekomendasiEvent.findMany({
       where,
       orderBy: { createdAt: 'desc' },
@@ -561,7 +639,9 @@ router.get('/admin/events', authenticate, canManageVoting, async (req, res) => {
 
 router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
   try {
-    const eventWhere = req.user.role === 'ADMIN' ? {} : { userId: req.user.id };
+    const eventWhere = req.user.role === 'ADMIN'
+      ? { votingConfig: { isNot: null } }
+      : { userId: req.user.id, votingConfig: { isNot: null } };
     const purchaseWhere = req.user.role === 'ADMIN' ? {} : { event: { userId: req.user.id } };
     const [purchases, paidTotals, paidByEvent, events] = await Promise.all([
       prisma.votingPurchase.findMany({

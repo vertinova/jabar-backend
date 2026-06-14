@@ -343,13 +343,20 @@ const getUserDashboard = async (req, res) => {
 
     if (req.user.role === 'PENYELENGGARA') {
       // Penyelenggara: rekomendasi event data
+      const recommendationWhere = {
+        userId,
+        OR: [
+          { jenisEvent: null },
+          { jenisEvent: { not: 'E-Voting' } },
+        ],
+      };
       const [totalRekomendasi, rekomendasiByStatus, recentRekomendasi] = await Promise.all([
-        prisma.rekomendasiEvent.count({ where: { userId } }),
+        prisma.rekomendasiEvent.count({ where: recommendationWhere }),
         prisma.rekomendasiEvent.groupBy({
-          by: ['status'], where: { userId }, _count: true
+          by: ['status'], where: recommendationWhere, _count: true
         }),
         prisma.rekomendasiEvent.findMany({
-          where: { userId }, orderBy: { createdAt: 'desc' }, take: 5,
+          where: recommendationWhere, orderBy: { createdAt: 'desc' }, take: 5,
           include: { pengcab: { select: { nama: true, kota: true } } }
         }),
       ]);

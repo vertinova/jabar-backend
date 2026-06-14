@@ -1,6 +1,13 @@
 const prisma = require('../lib/prisma');
 const { fetchForbasiAccounts, fetchForbasiAccount, fixForbasiFileUrl } = require('../lib/forbasi');
 
+const nonVotingRecommendationWhere = {
+  OR: [
+    { jenisEvent: null },
+    { jenisEvent: { not: 'E-Voting' } },
+  ],
+};
+
 const buildRankingStandings = (results) => {
   const map = new Map();
   for (const result of results) {
@@ -182,7 +189,7 @@ const getStats = async (req, res) => {
   try {
     const [totalPengcab, totalRekomendasi, totalKejurda, totalPendaftaran, totalUsers] = await Promise.all([
       prisma.pengcab.count(),
-      prisma.rekomendasiEvent.count(),
+      prisma.rekomendasiEvent.count({ where: nonVotingRecommendationWhere }),
       prisma.kejurda.count(),
       prisma.pendaftaranKejurda.count(),
       prisma.user.count()
@@ -190,6 +197,7 @@ const getStats = async (req, res) => {
 
     const rekomendasiByStatus = await prisma.rekomendasiEvent.groupBy({
       by: ['status'],
+      where: nonVotingRecommendationWhere,
       _count: true
     });
 
@@ -199,6 +207,7 @@ const getStats = async (req, res) => {
     });
 
     const recentRekomendasi = await prisma.rekomendasiEvent.findMany({
+      where: nonVotingRecommendationWhere,
       take: 5,
       orderBy: { createdAt: 'desc' },
       include: {

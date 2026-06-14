@@ -53,7 +53,14 @@ async function generateNomorSurat() {
 const getAll = async (req, res) => {
   try {
     const { search, status } = req.query;
-    const where = {};
+    const where = {
+      AND: [{
+        OR: [
+          { jenisEvent: null },
+          { jenisEvent: { not: 'E-Voting' } },
+        ],
+      }],
+    };
     
     // ADMIN sees all, PENGCAB sees events from their pengcab, others see own only
     if (req.user.role === 'ADMIN') {
@@ -69,11 +76,13 @@ const getAll = async (req, res) => {
       where.userId = req.user.id;
     }
     if (search) {
-      where.OR = [
-        { namaEvent: { contains: search } },
-        { penyelenggara: { contains: search } },
-        { lokasi: { contains: search } }
-      ];
+      where.AND.push({
+        OR: [
+          { namaEvent: { contains: search } },
+          { penyelenggara: { contains: search } },
+          { lokasi: { contains: search } }
+        ],
+      });
     }
     const effectiveStatus = status || (req.apiClient ? 'DISETUJUI' : null);
     if (effectiveStatus) where.status = effectiveStatus;

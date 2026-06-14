@@ -87,7 +87,13 @@ router.get('/landing/public/:region', async (req, res) => {
         select: { id: true, namaKejurda: true, jenisEvent: true, tanggalMulai: true, tanggalSelesai: true, lokasi: true, poster: true, deskripsi: true },
       }),
       prisma.rekomendasiEvent.findMany({
-        where: { status: 'DISETUJUI' },
+        where: {
+          status: 'DISETUJUI',
+          OR: [
+            { jenisEvent: null },
+            { jenisEvent: { not: 'E-Voting' } },
+          ],
+        },
         orderBy: { createdAt: 'desc' },
         take: 20,
         select: {
@@ -105,7 +111,15 @@ router.get('/landing/public/:region', async (req, res) => {
       // Quick stats
       Promise.all([
         prisma.pengcab.count({ where: { status: 'AKTIF' } }),
-        prisma.rekomendasiEvent.count({ where: { status: 'DISETUJUI' } }),
+        prisma.rekomendasiEvent.count({
+          where: {
+            status: 'DISETUJUI',
+            OR: [
+              { jenisEvent: null },
+              { jenisEvent: { not: 'E-Voting' } },
+            ],
+          },
+        }),
         prisma.kejurda.count({ where: { statusApproval: 'DISETUJUI' } }),
         prisma.user.count(),
       ]).then(([pengcabCount, rekomendasiCount, kejurdaCount, userCount]) => ({
