@@ -643,7 +643,8 @@ router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
       ? { votingConfig: { isNot: null } }
       : { userId: req.user.id, votingConfig: { isNot: null } };
     const purchaseWhere = req.user.role === 'ADMIN' ? {} : { event: { userId: req.user.id } };
-    const [purchases, paidTotals, paidByEvent, events] = await Promise.all([
+    const withdrawalWhere = req.user.role === 'ADMIN' ? {} : { userId: req.user.id };
+    const [purchases, paidTotals, paidByEvent, events, withdrawalByStatus] = await Promise.all([
       prisma.votingPurchase.findMany({
         where: purchaseWhere,
         orderBy: { createdAt: 'desc' },
@@ -688,16 +689,32 @@ router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
           },
         },
       }),
+      prisma.withdrawalRequest.groupBy({
+        by: ['status'],
+        where: withdrawalWhere,
+        _sum: { amount: true },
+      }),
     ]);
+
+    const withdrawalSum = (statuses) => withdrawalByStatus
+      .filter((item) => statuses.includes(item.status))
+      .reduce((sum, item) => sum + decimalToNumber(item._sum.amount), 0);
+    const organizerBalance = decimalToNumber(paidTotals._sum.organizerShareAmount);
+    const pendingWithdrawal = withdrawalSum(['PENDING', 'APPROVED']);
+    const withdrawnAmount = withdrawalSum(['PAID']);
+    const availableBalance = Math.max(0, organizerBalance - pendingWithdrawal - withdrawnAmount);
 
     const summary = {
       grossRevenue: decimalToNumber(paidTotals._sum.totalAmount),
-      organizerBalance: decimalToNumber(paidTotals._sum.organizerShareAmount),
+      organizerBalance,
       pengdaShare: decimalToNumber(paidTotals._sum.pengdaShareAmount),
       adminFee: decimalToNumber(paidTotals._sum.adminFee),
       qrisFee: decimalToNumber(paidTotals._sum.qrisFee),
       paidVotes: paidTotals._sum.voteCount || 0,
       paidTransactions: paidTotals._count,
+      pendingWithdrawal,
+      withdrawnAmount,
+      availableBalance,
     };
 
     const paidEventMap = new Map(paidByEvent.map((item) => [item.rekomendasiEventId, item]));
@@ -972,6 +989,160 @@ router.get('/admin/event/:eventId/results', authenticate, canManageVoting, async
     });
   } catch (error) {
     res.status(500).json({ error: 'Gagal memuat hasil voting', detail: error.message });
+  }
+});
+
+// ==================== PENCAIRAN / WITHDRAWAL ====================
+
+const withdrawalStatusLabel = {
+  PENDING: 'Menunggu verifikasi',
+  APPROVED: 'Disetujui, menunggu transfer',
+  PAID: 'Dana sudah ditransfer',
+  REJECTED: 'Ditolak',
+};
+
+const serializeWithdrawal = (item) => ({
+  id: item.id,
+  userId: item.userId,
+  userName: item.user?.name || null,
+  userEmail: item.user?.email || null,
+  amount: decimalToNumber(item.amount),
+  bankName: item.bankName,
+  accountNumber: item.accountNumber,
+  accountHolder: item.accountHolder,
+  note: item.note,
+  status: item.status,
+  statusLabel: withdrawalStatusLabel[item.status] || item.status,
+  adminNote: item.adminNote,
+  processedById: item.processedById,
+  processedAt: item.processedAt,
+  createdAt: item.createdAt,
+  updatedAt: item.updatedAt,
+});
+
+// Compute spendable balance for a given user (organizer paid share minus non-rejected withdrawals)
+const computeAvailableBalance = async (userId) => {
+  const [paidAgg, withdrawalAgg] = await Promise.all([
+    prisma.votingPurchase.aggregate({
+      where: { status: 'PAID', event: { userId } },
+      _sum: { organizerShareAmount: true },
+    }),
+    prisma.withdrawalRequest.aggregate({
+      where: { userId, status: { in: ['PENDING', 'APPROVED', 'PAID'] } },
+      _sum: { amount: true },
+    }),
+  ]);
+  const organizerBalance = decimalToNumber(paidAgg._sum.organizerShareAmount);
+  const reserved = decimalToNumber(withdrawalAgg._sum.amount);
+  return { organizerBalance, reserved, availableBalance: Math.max(0, organizerBalance - reserved) };
+};
+
+// List withdrawals (own for penyelenggara, all for admin)
+router.get('/admin/withdrawals', authenticate, canManageVoting, async (req, res) => {
+  try {
+    const isAdmin = req.user.role === 'ADMIN';
+    const where = isAdmin
+      ? (req.query.status ? { status: req.query.status } : {})
+      : { userId: req.user.id };
+    const [withdrawals, balance] = await Promise.all([
+      prisma.withdrawalRequest.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: 200,
+        include: { user: { select: { name: true, email: true } } },
+      }),
+      isAdmin ? Promise.resolve(null) : computeAvailableBalance(req.user.id),
+    ]);
+    res.json({
+      withdrawals: withdrawals.map(serializeWithdrawal),
+      balance,
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal memuat data pencairan', detail: error.message });
+  }
+});
+
+// Create a withdrawal request (penyelenggara/admin acting as organizer)
+router.post('/admin/withdrawals', authenticate, canManageVoting, async (req, res) => {
+  try {
+    const amount = Number(req.body.amount);
+    const bankName = String(req.body.bankName || '').trim();
+    const accountNumber = String(req.body.accountNumber || '').trim();
+    const accountHolder = String(req.body.accountHolder || '').trim();
+    const note = String(req.body.note || '').trim();
+
+    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'Nominal pencairan tidak valid' });
+    if (!bankName || !accountNumber || !accountHolder) {
+      return res.status(400).json({ error: 'Nama bank, nomor rekening, dan atas nama wajib diisi' });
+    }
+
+    const { availableBalance } = await computeAvailableBalance(req.user.id);
+    if (amount > availableBalance) {
+      return res.status(400).json({ error: `Nominal melebihi saldo tersedia (${availableBalance})` });
+    }
+
+    const created = await prisma.withdrawalRequest.create({
+      data: {
+        userId: req.user.id,
+        amount,
+        bankName,
+        accountNumber,
+        accountHolder,
+        note: note || null,
+      },
+      include: { user: { select: { name: true, email: true } } },
+    });
+    res.status(201).json({ message: 'Pengajuan pencairan dikirim', withdrawal: serializeWithdrawal(created) });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal mengajukan pencairan', detail: error.message });
+  }
+});
+
+// Cancel own pending withdrawal request
+router.delete('/admin/withdrawals/:id', authenticate, canManageVoting, async (req, res) => {
+  try {
+    const id = toId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'ID tidak valid' });
+    const existing = await prisma.withdrawalRequest.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Pengajuan tidak ditemukan' });
+
+    const isAdmin = req.user.role === 'ADMIN';
+    if (!isAdmin && existing.userId !== req.user.id) return res.status(403).json({ error: 'Tidak memiliki akses' });
+    if (existing.status !== 'PENDING') return res.status(400).json({ error: 'Hanya pengajuan berstatus menunggu yang bisa dibatalkan' });
+
+    await prisma.withdrawalRequest.delete({ where: { id } });
+    res.json({ message: 'Pengajuan pencairan dibatalkan' });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal membatalkan pencairan', detail: error.message });
+  }
+});
+
+// Update withdrawal status (ADMIN only): approve / reject / mark paid
+router.patch('/admin/withdrawals/:id', authenticate, async (req, res) => {
+  try {
+    if (req.user?.role !== 'ADMIN') return res.status(403).json({ error: 'Hanya admin yang dapat memproses pencairan' });
+    const id = toId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'ID tidak valid' });
+    const status = String(req.body.status || '').toUpperCase();
+    if (!['APPROVED', 'REJECTED', 'PAID'].includes(status)) {
+      return res.status(400).json({ error: 'Status tidak valid' });
+    }
+    const existing = await prisma.withdrawalRequest.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Pengajuan tidak ditemukan' });
+
+    const updated = await prisma.withdrawalRequest.update({
+      where: { id },
+      data: {
+        status,
+        adminNote: req.body.adminNote ? String(req.body.adminNote).trim() : existing.adminNote,
+        processedById: req.user.id,
+        processedAt: new Date(),
+      },
+      include: { user: { select: { name: true, email: true } } },
+    });
+    res.json({ message: 'Status pencairan diperbarui', withdrawal: serializeWithdrawal(updated) });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal memperbarui pencairan', detail: error.message });
   }
 });
 

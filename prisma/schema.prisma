@@ -24,6 +24,7 @@ model User {
   pengcab            Pengcab?             @relation(fields: [pengcabId], references: [id], onDelete: SetNull)
   rekomendasiEvents  RekomendasiEvent[]
   pendaftaranKejurda PendaftaranKejurda[]
+  withdrawalRequests WithdrawalRequest[]
 
   @@map("users")
 }
@@ -271,6 +272,34 @@ model VotingPurchase {
   @@index([buyerEmail])
   @@index([purchaseCode])
   @@map("voting_purchases")
+}
+
+enum WithdrawalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  PAID
+}
+
+model WithdrawalRequest {
+  id            Int              @id @default(autoincrement())
+  userId        Int              @map("user_id")
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount        Decimal          @db.Decimal(12, 2)
+  bankName      String           @map("bank_name")
+  accountNumber String           @map("account_number")
+  accountHolder String           @map("account_holder")
+  note          String?          @db.Text
+  status        WithdrawalStatus @default(PENDING)
+  adminNote     String?          @map("admin_note") @db.Text
+  processedById Int?             @map("processed_by_id")
+  processedAt   DateTime?        @map("processed_at")
+  createdAt     DateTime         @default(now()) @map("created_at")
+  updatedAt     DateTime         @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@index([status])
+  @@map("withdrawal_requests")
 }
 
 // ==================== KEJURDA ====================
