@@ -50,6 +50,7 @@ const createSnapTransaction = async ({
   customerPhone,
   adminFee = 0,
   itemDetails = [],
+  expiryDurationSeconds = null,
 }) => {
   if (!isMidtransConfigured()) {
     throw new Error('Midtrans belum dikonfigurasi');
@@ -82,6 +83,15 @@ const createSnapTransaction = async ({
     });
   }
 
+  // Bind the payment window to the voting close time. A QRIS code that is no
+  // longer valid cannot be paid, so a transaction started seconds before close
+  // expires (and is rejected by Midtrans) instead of settling after close.
+  let expiry;
+  const durationSeconds = Math.floor(Number(expiryDurationSeconds) || 0);
+  if (durationSeconds > 0) {
+    expiry = { unit: 'minute', duration: Math.max(1, Math.floor(durationSeconds / 60)) };
+  }
+
   const response = await fetch(`${getSnapBaseUrl()}/transactions`, {
     method: 'POST',
     headers: {
@@ -101,6 +111,7 @@ const createSnapTransaction = async ({
       },
       item_details: items,
       enabled_payments: ['other_qris'],
+      ...(expiry ? { expiry } : {}),
     }),
   });
 
@@ -135,6 +146,50 @@ const getTransactionStatus = async (orderId) => {
   return payload;
 };
 
+// Cancel a transaction that has not settled yet (e.g. abandoned checkout).
+const cancelTransaction = async (orderId) => {
+  if (!isMidtransConfigured()) {
+    throw new Error('Midtrans belum dikonfigurasi');
+  }
+  const response = await fetch(`${getCoreBaseUrl()}/${encodeURIComponent(orderId)}/cancel`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      Authorization: getAuthHeader(),
+    },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.status_message || payload?.message || 'Gagal membatalkan transaksi Midtrans');
+  }
+  return payload;
+};
+
+// Refund a transaction that already settled but must not be honored
+// (e.g. payment completed after voting closed).
+const refundTransaction = async (orderId, { amount, reason } = {}) => {
+  if (!isMidtransConfigured()) {
+    throw new Error('Midtrans belum dikonfigurasi');
+  }
+  const response = await fetch(`${getCoreBaseUrl()}/${encodeURIComponent(orderId)}/refund`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      Authorization: getAuthHeader(),
+    },
+    body: JSON.stringify({
+      reason: reason || 'Voting sudah ditutup',
+      ...(amount ? { amount: normalizeMoney(amount) } : {}),
+    }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.status_message || payload?.message || 'Gagal refund transaksi Midtrans');
+  }
+  return payload;
+};
+
 const verifySignature = ({ order_id, status_code, gross_amount, signature_key }) => {
   const { serverKey } = getMidtransConfig();
   if (!serverKey || !signature_key) return false;
@@ -161,6 +216,8 @@ module.exports = {
   QRIS_FEE_RATE,
   calculateQrisFee,
   createSnapTransaction,
+  cancelTransaction,
+  refundTransaction,
   getTransactionStatus,
   isMidtransConfigured,
   resolvePaymentStatus,

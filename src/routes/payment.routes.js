@@ -5,8 +5,9 @@ const {
   MIDTRANS_IS_PRODUCTION,
   resolvePaymentStatus,
   verifySignature,
+  refundTransaction,
 } = require('../lib/midtrans');
-const { applyPaidVotingPurchaseVotes } = require('../lib/votingPayment');
+const { finalizeVotingPurchaseSuccess } = require('../lib/votingPayment');
 
 router.get('/client-key', (req, res) => {
   res.json({
@@ -67,16 +68,12 @@ async function handleVotingPayment(midtransOrderId, result, paymentType) {
   if (['CANCELLED', 'EXPIRED'].includes(purchase.status) && result !== 'success') return;
 
   if (result === 'success') {
-    await prisma.$transaction(async (tx) => {
-      await tx.votingPurchase.update({
-        where: { id: purchase.id },
-        data: {
-          status: 'PAID',
-          paymentType: paymentType || null,
-          paidAt: purchase.paidAt || new Date(),
-        },
-      });
-      await applyPaidVotingPurchaseVotes(tx, purchase.id);
+    // Applies votes only when voting is still open; otherwise refunds + cancels.
+    await finalizeVotingPurchaseSuccess(prisma, purchase.id, {
+      paymentType: paymentType || null,
+      refund: (orderId) => refundTransaction(orderId, {
+        reason: 'Voting sudah ditutup sebelum pembayaran selesai',
+      }),
     });
     return;
   }

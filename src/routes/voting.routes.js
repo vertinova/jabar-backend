@@ -1,19 +1,24 @@
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const router = require('express').Router();
 const prisma = require('../lib/prisma');
 const upload = require('../middleware/upload.middleware');
 const { authenticate } = require('../middleware/auth.middleware');
 const {
+  calculateQrisFee,
   createSnapTransaction,
+  cancelTransaction,
+  refundTransaction,
   getTransactionStatus,
   isMidtransConfigured,
   resolvePaymentStatus,
 } = require('../lib/midtrans');
 const {
-  VOTING_MAX_ADMIN_FEE,
   applyPaidVotingPurchaseVotes,
   calculateVotingAdminFee,
   calculateVotingRevenueSplit,
+  finalizeVotingPurchaseSuccess,
 } = require('../lib/votingPayment');
 
 const optionalAuthenticate = (req, res, next) => {
@@ -30,6 +35,28 @@ const canManageVoting = (req, res, next) => {
 const toId = (value) => {
   const id = Number.parseInt(value, 10);
   return Number.isFinite(id) ? id : null;
+};
+
+const deleteUploadedFile = (filePath) => {
+  if (!filePath?.startsWith('/uploads/')) return;
+  const absolutePath = path.join(__dirname, '..', '..', filePath.replace(/^\/+/, ''));
+  if (fs.existsSync(absolutePath)) fs.unlinkSync(absolutePath);
+};
+
+const validateVotingPoster = (file) => {
+  if (!file) return null;
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) {
+    return 'Poster harus berupa JPG, PNG, atau WEBP';
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    return 'Ukuran poster maksimal 5 MB';
+  }
+  return null;
+};
+
+const toPositiveInteger = (value) => {
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 1 ? number : null;
 };
 
 const decimalToNumber = (value) => (value === null || value === undefined ? 0 : Number(value));
@@ -150,7 +177,7 @@ const validatePaidVotingTarget = async (eventId, categoryId, nomineeId) => {
   }
 
   const nominee = await prisma.votingNominee.findFirst({
-    where: { id: parsedNomineeId, categoryId: parsedCategoryId },
+    where: { id: parsedNomineeId, categoryId: parsedCategoryId, isActive: true },
   });
   if (!nominee) throw new Error('Nominee tidak ditemukan dalam kategori ini');
 
@@ -165,18 +192,14 @@ const refreshVotingPurchasePaymentStatus = async (purchaseId) => {
   const paymentResult = resolvePaymentStatus(txStatus.transaction_status, txStatus.fraud_status);
 
   if (paymentResult === 'success') {
-    return prisma.$transaction(async (tx) => {
-      await tx.votingPurchase.update({
-        where: { id: purchase.id },
-        data: {
-          status: 'PAID',
-          paymentType: txStatus.payment_type || null,
-          paidAt: new Date(),
-        },
-      });
-      await applyPaidVotingPurchaseVotes(tx, purchase.id);
-      return tx.votingPurchase.findUnique({ where: { id: purchase.id } });
+    // Applies votes only when voting is still open; otherwise refunds + cancels.
+    await finalizeVotingPurchaseSuccess(prisma, purchase.id, {
+      paymentType: txStatus.payment_type || null,
+      refund: (orderId) => refundTransaction(orderId, {
+        reason: 'Voting sudah ditutup sebelum pembayaran selesai',
+      }),
     });
+    return prisma.votingPurchase.findUnique({ where: { id: purchase.id } });
   }
 
   if (paymentResult === 'failed' || paymentResult === 'expired') {
@@ -263,7 +286,7 @@ router.get('/events/:eventId', async (req, res) => {
             categories: {
               where: { isActive: true },
               orderBy: { order: 'asc' },
-              include: { nominees: { orderBy: { voteCount: 'desc' } } },
+              include: { nominees: { where: { isActive: true }, orderBy: { voteCount: 'desc' } } },
             },
           },
         },
@@ -313,15 +336,8 @@ router.post('/vote', optionalAuthenticate, async (req, res) => {
       return res.status(400).json({ error: 'Voting berbayar belum diaktifkan di aplikasi ini' });
     }
 
-    const nominee = await prisma.votingNominee.findFirst({ where: { id: nomineeId, categoryId } });
+    const nominee = await prisma.votingNominee.findFirst({ where: { id: nomineeId, categoryId, isActive: true } });
     if (!nominee) return res.status(404).json({ error: 'Nominee tidak ditemukan' });
-
-    if (voterEmail) {
-      const existingVotes = await prisma.votingVote.count({ where: { categoryId, voterEmail } });
-      if (existingVotes >= category.maxVotesPerVoter) {
-        return res.status(400).json({ error: `Anda sudah mencapai batas maksimal ${category.maxVotesPerVoter} vote untuk kategori ini` });
-      }
-    }
 
     const vote = await prisma.$transaction(async (tx) => {
       const created = await tx.votingVote.create({
@@ -390,7 +406,7 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
     const pricePerVote = decimalToNumber(config.pricePerVote);
     const totalAmount = pricePerVote * voteCount;
     const adminFee = calculateVotingAdminFee(totalAmount, voteCount);
-    const paymentAmount = totalAmount + adminFee;
+    const { grossAmount: paymentAmount, fee: qrisFeeEstimate } = calculateQrisFee(totalAmount + adminFee);
     const revenueSplit = calculateVotingRevenueSplit(
       totalAmount,
       config.organizerSharePercent,
@@ -398,12 +414,12 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
     );
 
     if (paymentAmount > QRIS_MAX_TRANSACTION) {
-      const maxVotes = pricePerVote > 0
-        ? Math.max(1, Math.floor((QRIS_MAX_TRANSACTION - VOTING_MAX_ADMIN_FEE) / pricePerVote))
-        : 0;
+      const affordableVotes = pricePerVote > 0
+        ? Math.max(1, Math.floor((QRIS_MAX_TRANSACTION * 0.99 - calculateVotingAdminFee(QRIS_MAX_TRANSACTION, voteCount)) / pricePerVote))
+        : 1;
       return res.status(400).json({
-        error: `Maksimal pembayaran QRIS Rp ${QRIS_MAX_TRANSACTION.toLocaleString('id-ID')} per transaksi. Untuk event ini, jumlah vote maksimal ${maxVotes.toLocaleString('id-ID')} per pembelian.`,
-        maxVoteCount: maxVotes,
+        error: `Total harga vote, biaya admin, dan biaya QRIS tidak boleh melebihi Rp ${QRIS_MAX_TRANSACTION.toLocaleString('id-ID')} per transaksi.`,
+        maxVoteCount: affordableVotes,
         maxPaymentAmount: QRIS_MAX_TRANSACTION,
       });
     }
@@ -449,6 +465,12 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
 
     if (totalAmount > 0) {
       midtransOrderId = purchaseCode;
+      // Expire the payment window at the voting close time so a QRIS code cannot
+      // be paid after voting has ended.
+      const votingEndDate = config.endDate ? new Date(config.endDate) : null;
+      const expiryDurationSeconds = votingEndDate
+        ? Math.floor((votingEndDate.getTime() - Date.now()) / 1000)
+        : null;
       const snapResult = await createSnapTransaction({
         orderId: midtransOrderId,
         grossAmount: totalAmount,
@@ -464,6 +486,7 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
             name: 'Paket Vote',
           },
         ],
+        expiryDurationSeconds,
       });
       snapToken = snapResult.token;
       redirectUrl = snapResult.redirectUrl;
@@ -482,7 +505,7 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
         ...purchase,
         totalAmount: decimalToNumber(purchase.totalAmount),
         adminFee,
-        qrisFee,
+        qrisFee: qrisFee || qrisFeeEstimate,
         grossAmount,
         paymentAmount: grossAmount || paymentAmount,
         snapToken,
@@ -543,32 +566,96 @@ router.post('/payment-status', optionalAuthenticate, async (req, res) => {
   }
 });
 
-router.post('/admin/events', authenticate, canManageVoting, async (req, res) => {
+// Cancel an abandoned checkout so it does not linger as PENDING.
+// Refreshes from Midtrans first, so a payment the buyer actually completed is
+// honored (PAID) instead of being wrongly cancelled.
+router.post('/cancel-purchase', optionalAuthenticate, async (req, res) => {
   try {
+    const purchaseCode = normalizePurchaseCode(req.body.purchaseCode || req.body.orderId);
+    if (!purchaseCode) return res.status(400).json({ error: 'Kode pembelian wajib diisi' });
+
+    let purchase = await prisma.votingPurchase.findFirst({
+      where: getPurchaseLookupWhere(purchaseCode),
+    });
+    if (!purchase) return res.status(404).json({ error: 'Kode pembelian tidak valid' });
+
+    if (purchase.status === 'PAID') {
+      return res.json({ status: 'PAID', message: 'Pembayaran sudah berhasil' });
+    }
+    if (['CANCELLED', 'EXPIRED'].includes(purchase.status)) {
+      return res.json({ status: purchase.status, message: 'Transaksi sudah dibatalkan' });
+    }
+
+    // Reconcile with Midtrans — the buyer may have paid even though the popup closed.
+    if (purchase.midtransOrderId) {
+      try {
+        await refreshVotingPurchasePaymentStatus(purchase.id);
+        purchase = await prisma.votingPurchase.findUnique({ where: { id: purchase.id } });
+      } catch (midtransError) {
+        console.error('Gagal refresh sebelum membatalkan voting:', midtransError.message);
+      }
+    }
+
+    if (purchase.status !== 'PENDING') {
+      return res.json({ status: purchase.status, message: getPaymentMessage(purchase.status) });
+    }
+
+    // Still unpaid — cancel at Midtrans (best effort) and locally.
+    if (purchase.midtransOrderId) {
+      try {
+        await cancelTransaction(purchase.midtransOrderId);
+      } catch (cancelError) {
+        console.error('Gagal membatalkan transaksi Midtrans voting:', cancelError.message);
+      }
+    }
+
+    const updated = await prisma.votingPurchase.update({
+      where: { id: purchase.id },
+      data: { status: 'CANCELLED' },
+    });
+    res.json({ status: updated.status, message: 'Transaksi dibatalkan' });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal membatalkan transaksi', detail: error.message });
+  }
+});
+
+router.post('/admin/events', authenticate, canManageVoting, upload.single('poster'), async (req, res) => {
+  try {
+    const posterPath = req.file ? `/uploads/${req.file.filename}` : null;
+    const rejectCreate = (message) => {
+      deleteUploadedFile(posterPath);
+      return res.status(400).json({ error: message });
+    };
+    const posterError = validateVotingPoster(req.file);
+    if (posterError) return rejectCreate(posterError);
+
     const title = String(req.body.title || '').trim();
     const description = String(req.body.description || '').trim();
     const location = String(req.body.location || '').trim();
     const startDate = req.body.startDate ? new Date(req.body.startDate) : null;
     const endDate = req.body.endDate ? new Date(req.body.endDate) : null;
 
-    if (!title) return res.status(400).json({ error: 'Judul vote wajib diisi' });
-    if (title.length > 191) return res.status(400).json({ error: 'Judul vote maksimal 191 karakter' });
-    if (location.length > 191) return res.status(400).json({ error: 'Lokasi maksimal 191 karakter' });
+    if (!title) return rejectCreate('Judul vote wajib diisi');
+    if (title.length > 191) return rejectCreate('Judul vote maksimal 191 karakter');
+    if (location.length > 191) return rejectCreate('Lokasi maksimal 191 karakter');
     if (startDate && Number.isNaN(startDate.getTime())) {
-      return res.status(400).json({ error: 'Tanggal mulai tidak valid' });
+      return rejectCreate('Tanggal mulai tidak valid');
     }
     if (endDate && Number.isNaN(endDate.getTime())) {
-      return res.status(400).json({ error: 'Tanggal selesai tidak valid' });
+      return rejectCreate('Tanggal selesai tidak valid');
     }
     if (startDate && endDate && endDate <= startDate) {
-      return res.status(400).json({ error: 'Tanggal selesai harus setelah tanggal mulai' });
+      return rejectCreate('Tanggal selesai harus setelah tanggal mulai');
     }
 
     const owner = await prisma.user.findUnique({
       where: { id: req.user.id },
       select: { id: true, name: true, phone: true, pengcabId: true },
     });
-    if (!owner) return res.status(404).json({ error: 'Akun penyelenggara tidak ditemukan' });
+    if (!owner) {
+      deleteUploadedFile(posterPath);
+      return res.status(404).json({ error: 'Akun penyelenggara tidak ditemukan' });
+    }
 
     const event = await prisma.$transaction(async (tx) => {
       const createdEvent = await tx.rekomendasiEvent.create({
@@ -579,6 +666,7 @@ router.post('/admin/events', authenticate, canManageVoting, async (req, res) => 
           tanggalSelesai: endDate,
           lokasi: location || null,
           deskripsi: description || null,
+          poster: posterPath,
           penyelenggara: owner.name,
           kontakPerson: owner.phone,
           status: 'DISETUJUI',
@@ -615,7 +703,59 @@ router.post('/admin/events', authenticate, canManageVoting, async (req, res) => 
       event: normalizeEvent(event),
     });
   } catch (error) {
+    if (req.file) deleteUploadedFile(`/uploads/${req.file.filename}`);
     res.status(500).json({ error: 'Gagal membuat vote', detail: error.message });
+  }
+});
+
+router.put('/admin/events/:eventId/poster', authenticate, canManageVoting, upload.single('poster'), async (req, res) => {
+  const posterPath = req.file ? `/uploads/${req.file.filename}` : null;
+  try {
+    const eventId = toId(req.params.eventId);
+    if (!eventId) {
+      deleteUploadedFile(posterPath);
+      return res.status(400).json({ error: 'ID event tidak valid' });
+    }
+    if (!(await verifyEventOwnership(req, eventId))) {
+      deleteUploadedFile(posterPath);
+      return res.status(403).json({ error: 'Tidak memiliki akses ke event ini' });
+    }
+    if (!req.file) return res.status(400).json({ error: 'File poster wajib dipilih' });
+
+    const posterError = validateVotingPoster(req.file);
+    if (posterError) {
+      deleteUploadedFile(posterPath);
+      return res.status(400).json({ error: posterError });
+    }
+
+    const existing = await prisma.rekomendasiEvent.findUnique({
+      where: { id: eventId },
+      select: { poster: true, votingConfig: { select: { id: true } } },
+    });
+    if (!existing?.votingConfig) {
+      deleteUploadedFile(posterPath);
+      return res.status(404).json({ error: 'Vote tidak ditemukan' });
+    }
+
+    const event = await prisma.rekomendasiEvent.update({
+      where: { id: eventId },
+      data: { poster: posterPath },
+      include: {
+        votingConfig: {
+          include: {
+            categories: {
+              include: { _count: { select: { nominees: true, votes: true } } },
+            },
+          },
+        },
+      },
+    });
+
+    if (existing.poster && existing.poster !== posterPath) deleteUploadedFile(existing.poster);
+    res.json({ message: 'Poster vote berhasil disimpan', event: normalizeEvent(event) });
+  } catch (error) {
+    deleteUploadedFile(posterPath);
+    res.status(500).json({ error: 'Gagal menyimpan poster vote', detail: error.message });
   }
 });
 
@@ -840,7 +980,6 @@ router.post('/admin/event/:eventId/categories', authenticate, canManageVoting, a
         description: req.body.description || null,
         mode: req.body.mode === 'PERSONAL' ? 'PERSONAL' : 'TEAM',
         position: req.body.position || null,
-        maxVotesPerVoter: Number.parseInt(req.body.maxVotesPerVoter, 10) || 1,
         order: Number.parseInt(req.body.order, 10) || 0,
       },
       include: { _count: { select: { nominees: true, votes: true } } },
@@ -866,7 +1005,6 @@ router.put('/admin/categories/:categoryId', authenticate, canManageVoting, async
         ...(req.body.description !== undefined && { description: req.body.description || null }),
         ...(req.body.mode !== undefined && { mode: req.body.mode === 'PERSONAL' ? 'PERSONAL' : 'TEAM' }),
         ...(req.body.position !== undefined && { position: req.body.position || null }),
-        ...(req.body.maxVotesPerVoter !== undefined && { maxVotesPerVoter: Number.parseInt(req.body.maxVotesPerVoter, 10) || 1 }),
         ...(req.body.isActive !== undefined && { isActive: !!req.body.isActive }),
         ...(req.body.order !== undefined && { order: Number.parseInt(req.body.order, 10) || 0 }),
       },
@@ -937,12 +1075,22 @@ router.put('/admin/nominees/:nomineeId', authenticate, canManageVoting, upload.s
     if (!eventId) return res.status(404).json({ error: 'Nominee tidak ditemukan' });
     if (!(await verifyEventOwnership(req, eventId))) return res.status(403).json({ error: 'Tidak memiliki akses ke nominee ini' });
 
-    const data = {
-      nomineeName: req.body.nomineeName,
-      nomineeSubtitle: req.body.nomineeSubtitle || null,
-    };
+    // Only touch fields that were actually sent, so a status toggle never wipes
+    // the name/subtitle and an edit never changes the active flag.
+    const data = {};
+    if (req.body.nomineeName !== undefined) {
+      const name = String(req.body.nomineeName).trim();
+      if (!name) return res.status(400).json({ error: 'Nama nominee wajib diisi' });
+      data.nomineeName = name;
+    }
+    if (req.body.nomineeSubtitle !== undefined) {
+      data.nomineeSubtitle = String(req.body.nomineeSubtitle).trim() || null;
+    }
     if (req.file) data.nomineePhoto = `/uploads/${req.file.filename}`;
     if (req.body.clearPhoto === 'true') data.nomineePhoto = null;
+    if (req.body.isActive !== undefined) {
+      data.isActive = req.body.isActive === true || req.body.isActive === 'true';
+    }
 
     const nominee = await prisma.votingNominee.update({ where: { id: nomineeId }, data });
     res.json(nominee);
@@ -951,18 +1099,12 @@ router.put('/admin/nominees/:nomineeId', authenticate, canManageVoting, upload.s
   }
 });
 
+// Nominees are never hard-deleted (votes/history must stay intact). Organizers
+// deactivate them instead via PUT { isActive: false }.
 router.delete('/admin/nominees/:nomineeId', authenticate, canManageVoting, async (req, res) => {
-  try {
-    const nomineeId = toId(req.params.nomineeId);
-    if (!nomineeId) return res.status(400).json({ error: 'ID nominee tidak valid' });
-    const eventId = await getEventIdForNominee(nomineeId);
-    if (!eventId) return res.status(404).json({ error: 'Nominee tidak ditemukan' });
-    if (!(await verifyEventOwnership(req, eventId))) return res.status(403).json({ error: 'Tidak memiliki akses ke nominee ini' });
-    await prisma.votingNominee.delete({ where: { id: nomineeId } });
-    res.json({ message: 'Nominee berhasil dihapus' });
-  } catch (error) {
-    res.status(500).json({ error: 'Gagal menghapus nominee', detail: error.message });
-  }
+  return res.status(400).json({
+    error: 'Nominee tidak dapat dihapus. Nonaktifkan nominee agar tidak tampil di voting publik.',
+  });
 });
 
 router.get('/admin/event/:eventId/results', authenticate, canManageVoting, async (req, res) => {
