@@ -18,6 +18,7 @@ const simpaskorRoutes = require('./routes/simpaskor.routes');
 const apiKeyRoutes = require('./routes/apiKey.routes');
 const externalRoutes = require('./routes/external.routes');
 const votingRoutes = require('./routes/voting.routes');
+const monitoringRoutes = require('./routes/monitoring.routes');
 const paymentRoutes = require('./routes/payment.routes');
 const rankingRoutes = require('./routes/ranking.routes');
 
@@ -46,6 +47,7 @@ app.use('/api/simpaskor', simpaskorRoutes);
 app.use('/api/api-keys', apiKeyRoutes);
 app.use('/api/external', externalRoutes);
 app.use('/api/voting', votingRoutes);
+app.use('/api/monitoring', monitoringRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/ranking', rankingRoutes);
 
