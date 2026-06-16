@@ -826,6 +826,8 @@ router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
         select: {
           id: true,
           namaEvent: true,
+          penyelenggara: true,
+          user: { select: { id: true, name: true } },
           votingConfig: {
             select: {
               approvalStatus: true,
@@ -869,6 +871,8 @@ router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
       return {
         eventId: event.id,
         eventName: event.namaEvent,
+        organizerId: event.user?.id || null,
+        organizerName: event.user?.name || event.penyelenggara || 'Tanpa penyelenggara',
         approvalStatus: event.votingConfig?.approvalStatus || 'PENDING',
         organizerSharePercent: decimalToNumber(event.votingConfig?.organizerSharePercent),
         pengdaSharePercent: decimalToNumber(event.votingConfig?.pengdaSharePercent),
