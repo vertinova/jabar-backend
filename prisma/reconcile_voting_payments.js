@@ -52,9 +52,10 @@ async function main() {
     try {
       const tx = await getTransactionStatus(p.midtransOrderId);
       const result = resolvePaymentStatus(tx.transaction_status, tx.fraud_status);
+      const endDate = p.event?.votingConfig?.endDate ? new Date(p.event.votingConfig.endDate) : null;
+      const votingClosed = endDate && new Date() > endDate;
 
       if (result === 'success') {
-        const endDate = p.event?.votingConfig?.endDate ? new Date(p.event.votingConfig.endDate) : null;
         const settledAt = parseWIB(tx.settlement_time) || parseWIB(tx.transaction_time) || new Date();
         if (endDate && settledAt > endDate) {
           stats.late += 1;
@@ -85,7 +86,16 @@ async function main() {
           await prisma.votingPurchase.update({ where: { id: p.id }, data: { status: 'CANCELLED', paymentType: tx.payment_type || null } });
         }
         stats.cancelled += 1;
+      } else if (votingClosed) {
+        // Still 'pending' at Midtrans but the voting already closed — this QRIS
+        // can never be paid, so retire it instead of letting it linger PENDING.
+        if (APPLY) {
+          await prisma.votingPurchase.update({ where: { id: p.id }, data: { status: 'EXPIRED', paymentType: tx.payment_type || null } });
+        }
+        stats.expired += 1;
+        console.log(`  EXPIRE ${p.purchaseCode} (pending tapi voting sudah tutup)`);
       } else {
+        // Genuinely in-progress (or QRIS still valid while voting is open).
         stats.pending += 1;
       }
     } catch (error) {
