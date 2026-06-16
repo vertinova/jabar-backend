@@ -761,8 +761,10 @@ router.put('/admin/events/:eventId/poster', authenticate, canManageVoting, uploa
 
 router.get('/admin/events', authenticate, canManageVoting, async (req, res) => {
   try {
+    // Super admin only manages votes already approved by FORBASI Pusat; the owning
+    // penyelenggara still sees all of theirs (including pending) to configure them.
     const where = req.user.role === 'ADMIN'
-      ? { votingConfig: { isNot: null } }
+      ? { votingConfig: { is: { approvalStatus: 'APPROVED' } } }
       : { userId: req.user.id, votingConfig: { isNot: null } };
     const events = await prisma.rekomendasiEvent.findMany({
       where,
@@ -780,7 +782,7 @@ router.get('/admin/events', authenticate, canManageVoting, async (req, res) => {
 router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
   try {
     const eventWhere = req.user.role === 'ADMIN'
-      ? { votingConfig: { isNot: null } }
+      ? { votingConfig: { is: { approvalStatus: 'APPROVED' } } }
       : { userId: req.user.id, votingConfig: { isNot: null } };
     const purchaseWhere = req.user.role === 'ADMIN' ? {} : { event: { userId: req.user.id } };
     const withdrawalWhere = req.user.role === 'ADMIN' ? {} : { userId: req.user.id };
@@ -898,6 +900,108 @@ router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: 'Gagal memuat saldo voting', detail: error.message });
+  }
+});
+
+// Detailed, paginated transaction history for the organizer. Unlike /admin/wallet
+// (which caps at 200 rows and only exposes the buyer name), this exposes full
+// buyer contact data and the nominee/category each purchase was cast for, plus
+// filtering by status/event and free-text search.
+const PURCHASE_STATUSES = ['PENDING', 'PAID', 'CANCELLED', 'EXPIRED'];
+
+router.get('/admin/transactions', authenticate, canManageVoting, async (req, res) => {
+  try {
+    const { search = '', status = '', eventId = '', page = '1', limit = '20' } = req.query;
+    const pageNum = Math.max(1, Number.parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, Number.parseInt(limit, 10) || 20));
+    const skip = (pageNum - 1) * limitNum;
+
+    const where = req.user.role === 'ADMIN' ? {} : { event: { userId: req.user.id } };
+
+    const parsedEventId = toId(eventId);
+    if (parsedEventId) where.rekomendasiEventId = parsedEventId;
+
+    const normalizedStatus = String(status).toUpperCase();
+    if (PURCHASE_STATUSES.includes(normalizedStatus)) where.status = normalizedStatus;
+
+    const term = String(search).trim();
+    if (term) {
+      where.OR = [
+        { buyerName: { contains: term } },
+        { buyerEmail: { contains: term } },
+        { buyerPhone: { contains: term } },
+        { purchaseCode: { contains: term } },
+      ];
+    }
+
+    const [purchases, total, paidAgg] = await Promise.all([
+      prisma.votingPurchase.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limitNum,
+        include: { event: { select: { id: true, namaEvent: true } } },
+      }),
+      prisma.votingPurchase.count({ where }),
+      prisma.votingPurchase.aggregate({
+        where: { ...where, status: 'PAID' },
+        _sum: { totalAmount: true, voteCount: true, organizerShareAmount: true },
+        _count: true,
+      }),
+    ]);
+
+    // VotingPurchase stores categoryId/nomineeId as plain ids (no relation), so
+    // resolve their display names in one batched lookup each.
+    const categoryIds = [...new Set(purchases.map((p) => p.categoryId).filter(Boolean))];
+    const nomineeIds = [...new Set(purchases.map((p) => p.nomineeId).filter(Boolean))];
+    const [categories, nominees] = await Promise.all([
+      categoryIds.length
+        ? prisma.votingCategory.findMany({ where: { id: { in: categoryIds } }, select: { id: true, title: true } })
+        : [],
+      nomineeIds.length
+        ? prisma.votingNominee.findMany({ where: { id: { in: nomineeIds } }, select: { id: true, nomineeName: true } })
+        : [],
+    ]);
+    const categoryMap = new Map(categories.map((c) => [c.id, c.title]));
+    const nomineeMap = new Map(nominees.map((n) => [n.id, n.nomineeName]));
+
+    res.json({
+      data: purchases.map((purchase) => ({
+        id: purchase.id,
+        purchaseCode: purchase.purchaseCode,
+        eventId: purchase.rekomendasiEventId,
+        eventName: purchase.event?.namaEvent,
+        buyerName: purchase.buyerName,
+        buyerEmail: purchase.buyerEmail,
+        buyerPhone: purchase.buyerPhone,
+        categoryName: purchase.categoryId ? categoryMap.get(purchase.categoryId) || null : null,
+        nomineeName: purchase.nomineeId ? nomineeMap.get(purchase.nomineeId) || null : null,
+        voteCount: purchase.voteCount,
+        usedVotes: purchase.usedVotes,
+        status: purchase.status,
+        paymentType: purchase.paymentType,
+        totalAmount: decimalToNumber(purchase.totalAmount),
+        adminFee: decimalToNumber(purchase.adminFee),
+        qrisFee: decimalToNumber(purchase.qrisFee),
+        grossAmount: decimalToNumber(purchase.grossAmount),
+        organizerShareAmount: decimalToNumber(purchase.organizerShareAmount),
+        organizerSharePercent: decimalToNumber(purchase.organizerSharePercent),
+        paidAt: purchase.paidAt,
+        createdAt: purchase.createdAt,
+      })),
+      total,
+      page: pageNum,
+      totalPages: Math.max(1, Math.ceil(total / limitNum)),
+      summary: {
+        totalRecords: total,
+        paidTransactions: paidAgg._count,
+        paidVotes: paidAgg._sum.voteCount || 0,
+        paidRevenue: decimalToNumber(paidAgg._sum.totalAmount),
+        organizerShare: decimalToNumber(paidAgg._sum.organizerShareAmount),
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal memuat riwayat transaksi', detail: error.message });
   }
 });
 
