@@ -4,11 +4,18 @@
  */
 const crypto = require('crypto');
 const { PrismaClient } = require('@prisma/client');
+require('dotenv').config();
+
 const prisma = new PrismaClient();
 
-const PUSAT_KEY = 'fbsi_0801e38ed9268caed09d634ab0d91270bb8ac66b139c7af91d62dfe96122b44d';
+// API key FORBASI Pusat dibaca dari environment — jangan hard-code di repo.
+const PUSAT_KEY = process.env.FORBASI_PUSAT_API_KEY;
 
 async function main() {
+  if (!PUSAT_KEY) {
+    console.error('❌ FORBASI_PUSAT_API_KEY belum diset di .env. Tambahkan variabel tersebut lalu jalankan ulang.');
+    process.exit(1);
+  }
   const keyHash = crypto.createHash('sha256').update(PUSAT_KEY).digest('hex');
   const keyPrefix = PUSAT_KEY.substring(0, 13) + '...';
 
