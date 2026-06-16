@@ -21,6 +21,12 @@ const getCoreBaseUrl = () =>
     ? 'https://api.midtrans.com/v2'
     : 'https://api.sandbox.midtrans.com/v2';
 
+// This Midtrans account is shared by several apps, but the dashboard allows only
+// ONE payment notification URL (currently another app's). Override it per
+// transaction so voting (VOT-*) callbacks reach THIS backend instead.
+const getNotificationUrl = () =>
+  process.env.MIDTRANS_NOTIFICATION_URL || 'https://jabar.forbasi.or.id/api/payments/notification';
+
 const QRIS_FEE_RATE = 0.007;
 
 const isMidtransConfigured = () => {
@@ -98,6 +104,9 @@ const createSnapTransaction = async ({
       Accept: 'application/json',
       'Content-Type': 'application/json',
       Authorization: getAuthHeader(),
+      // Route this transaction's notification to our endpoint regardless of the
+      // shared account's dashboard URL.
+      ...(getNotificationUrl() ? { 'X-Override-Notification': getNotificationUrl() } : {}),
     },
     body: JSON.stringify({
       transaction_details: {
