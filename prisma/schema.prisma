@@ -35,6 +35,9 @@ enum Role {
   USER
   PENYELENGGARA
   UMUM
+  // Super admin khusus pengelolaan e-voting (tidak di-SSO ke FORBASI Pusat,
+  // tidak punya akses panel admin lain selain kelola vote).
+  SUPERADMIN
 }
 
 // ==================== PENGCAB ====================

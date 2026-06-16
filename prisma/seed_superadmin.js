@@ -1,5 +1,5 @@
 /**
- * Seed akun SUPER ADMIN (role ADMIN) untuk Pengda Jabar.
+ * Seed akun SUPER ADMIN (role SUPERADMIN) untuk Pengda Jabar.
  *
  * Super admin ini dapat mengelola SEMUA event vote — termasuk konfigurasi voting,
  * kategori/nominee, statistik, pencairan, dan melihat riwayat transaksi seluruh
@@ -34,12 +34,12 @@ async function main() {
   if (existing) {
     user = await prisma.user.update({
       where: { id: existing.id },
-      data: { name: NAME, password: hashedPassword, role: 'ADMIN' },
+      data: { name: NAME, password: hashedPassword, role: 'SUPERADMIN' },
     });
-    console.log('♻️  Akun sudah ada — diperbarui menjadi SUPER ADMIN (role ADMIN).');
+    console.log('♻️  Akun sudah ada — diperbarui menjadi SUPER ADMIN (role SUPERADMIN).');
   } else {
     user = await prisma.user.create({
-      data: { name: NAME, email: EMAIL, password: hashedPassword, role: 'ADMIN' },
+      data: { name: NAME, email: EMAIL, password: hashedPassword, role: 'SUPERADMIN' },
     });
     console.log('✅ Akun super admin baru berhasil dibuat.');
   }

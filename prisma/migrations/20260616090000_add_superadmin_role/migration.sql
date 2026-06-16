@@ -1,0 +1,2 @@
+-- AlterTable: add SUPERADMIN to the users.role enum
+ALTER TABLE `users` MODIFY `role` ENUM('ADMIN', 'PENGCAB', 'USER', 'PENYELENGGARA', 'UMUM', 'SUPERADMIN') NOT NULL DEFAULT 'USER';

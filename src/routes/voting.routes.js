@@ -27,8 +27,12 @@ const optionalAuthenticate = (req, res, next) => {
   return authenticate(req, res, next);
 };
 
+// SUPERADMIN manages every organizer's vote just like ADMIN does (but only here,
+// in the voting module — it has no access to the rest of the admin panel).
+const isAdminRole = (role) => role === 'ADMIN' || role === 'SUPERADMIN';
+
 const canManageVoting = (req, res, next) => {
-  if (['ADMIN', 'PENYELENGGARA'].includes(req.user?.role)) return next();
+  if (['ADMIN', 'SUPERADMIN', 'PENYELENGGARA'].includes(req.user?.role)) return next();
   return res.status(403).json({ error: 'Akses ditolak' });
 };
 
@@ -95,7 +99,7 @@ const getClientIp = (req) =>
   '';
 
 const verifyEventOwnership = async (req, eventId) => {
-  if (req.user?.role === 'ADMIN') return true;
+  if (isAdminRole(req.user?.role)) return true;
   const event = await prisma.rekomendasiEvent.findUnique({
     where: { id: eventId },
     select: { userId: true },
@@ -763,7 +767,7 @@ router.get('/admin/events', authenticate, canManageVoting, async (req, res) => {
   try {
     // Super admin only manages votes already approved by FORBASI Pusat; the owning
     // penyelenggara still sees all of theirs (including pending) to configure them.
-    const where = req.user.role === 'ADMIN'
+    const where = isAdminRole(req.user.role)
       ? { votingConfig: { is: { approvalStatus: 'APPROVED' } } }
       : { userId: req.user.id, votingConfig: { isNot: null } };
     const events = await prisma.rekomendasiEvent.findMany({
@@ -781,11 +785,11 @@ router.get('/admin/events', authenticate, canManageVoting, async (req, res) => {
 
 router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
   try {
-    const eventWhere = req.user.role === 'ADMIN'
+    const eventWhere = isAdminRole(req.user.role)
       ? { votingConfig: { is: { approvalStatus: 'APPROVED' } } }
       : { userId: req.user.id, votingConfig: { isNot: null } };
-    const purchaseWhere = req.user.role === 'ADMIN' ? {} : { event: { userId: req.user.id } };
-    const withdrawalWhere = req.user.role === 'ADMIN' ? {} : { userId: req.user.id };
+    const purchaseWhere = isAdminRole(req.user.role) ? {} : { event: { userId: req.user.id } };
+    const withdrawalWhere = isAdminRole(req.user.role) ? {} : { userId: req.user.id };
     const [purchases, paidTotals, paidByEvent, events, withdrawalByStatus] = await Promise.all([
       prisma.votingPurchase.findMany({
         where: purchaseWhere,
@@ -916,7 +920,7 @@ router.get('/admin/transactions', authenticate, canManageVoting, async (req, res
     const limitNum = Math.min(100, Math.max(1, Number.parseInt(limit, 10) || 20));
     const skip = (pageNum - 1) * limitNum;
 
-    const where = req.user.role === 'ADMIN' ? {} : { event: { userId: req.user.id } };
+    const where = isAdminRole(req.user.role) ? {} : { event: { userId: req.user.id } };
 
     const parsedEventId = toId(eventId);
     if (parsedEventId) where.rekomendasiEventId = parsedEventId;
@@ -1286,7 +1290,7 @@ const computeAvailableBalance = async (userId) => {
 // List withdrawals (own for penyelenggara, all for admin)
 router.get('/admin/withdrawals', authenticate, canManageVoting, async (req, res) => {
   try {
-    const isAdmin = req.user.role === 'ADMIN';
+    const isAdmin = isAdminRole(req.user.role);
     const where = isAdmin
       ? (req.query.status ? { status: req.query.status } : {})
       : { userId: req.user.id };
@@ -1352,7 +1356,7 @@ router.delete('/admin/withdrawals/:id', authenticate, canManageVoting, async (re
     const existing = await prisma.withdrawalRequest.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Pengajuan tidak ditemukan' });
 
-    const isAdmin = req.user.role === 'ADMIN';
+    const isAdmin = isAdminRole(req.user.role);
     if (!isAdmin && existing.userId !== req.user.id) return res.status(403).json({ error: 'Tidak memiliki akses' });
     if (existing.status !== 'PENDING') return res.status(400).json({ error: 'Hanya pengajuan berstatus menunggu yang bisa dibatalkan' });
 
@@ -1366,7 +1370,7 @@ router.delete('/admin/withdrawals/:id', authenticate, canManageVoting, async (re
 // Update withdrawal status (ADMIN only): approve / reject / mark paid
 router.patch('/admin/withdrawals/:id', authenticate, async (req, res) => {
   try {
-    if (req.user?.role !== 'ADMIN') return res.status(403).json({ error: 'Hanya admin yang dapat memproses pencairan' });
+    if (!isAdminRole(req.user?.role)) return res.status(403).json({ error: 'Hanya admin yang dapat memproses pencairan' });
     const id = toId(req.params.id);
     if (!id) return res.status(400).json({ error: 'ID tidak valid' });
     const status = String(req.body.status || '').toUpperCase();
