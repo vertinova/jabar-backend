@@ -307,9 +307,10 @@ router.get('/events/:eventId', async (req, res) => {
   }
 });
 
-// Public: the single voter who cast the most votes in an event.
+// Public: the top 3 voters who cast the most votes in an event.
 // Paid voting is aggregated per buyer (by phone, the reliable per-person key);
-// free voting is aggregated per voter name. Returns { topVoter: { name, voteCount } | null }.
+// free voting is aggregated per voter name. Returns { topVoters: [{ name, voteCount }] }
+// ordered desc (also keeps `topVoter` = first entry for backward compatibility).
 router.get('/events/:eventId/top-voter', async (req, res) => {
   try {
     const eventId = toId(req.params.eventId);
@@ -325,23 +326,28 @@ router.get('/events/:eventId/top-voter', async (req, res) => {
     });
     if (!event) return res.status(404).json({ error: 'Event voting tidak ditemukan' });
 
+    const respond = (topVoters) => res.json({ topVoters, topVoter: topVoters[0] || null });
+
     if (event.votingConfig?.isPaid) {
       const grouped = await prisma.votingPurchase.groupBy({
         by: ['buyerPhone'],
         where: { rekomendasiEventId: eventId, status: 'PAID', buyerPhone: { not: null } },
         _sum: { voteCount: true },
         orderBy: { _sum: { voteCount: 'desc' } },
-        take: 1,
+        take: 3,
       });
-      const top = grouped[0];
-      if (!top || !top._sum.voteCount) return res.json({ topVoter: null });
 
-      const purchase = await prisma.votingPurchase.findFirst({
-        where: { rekomendasiEventId: eventId, status: 'PAID', buyerPhone: top.buyerPhone },
-        orderBy: { createdAt: 'desc' },
-        select: { buyerName: true },
-      });
-      return res.json({ topVoter: { name: purchase?.buyerName || 'Anonim', voteCount: top._sum.voteCount } });
+      const topVoters = [];
+      for (const group of grouped) {
+        if (!group._sum.voteCount) continue;
+        const purchase = await prisma.votingPurchase.findFirst({
+          where: { rekomendasiEventId: eventId, status: 'PAID', buyerPhone: group.buyerPhone },
+          orderBy: { createdAt: 'desc' },
+          select: { buyerName: true },
+        });
+        topVoters.push({ name: purchase?.buyerName || 'Anonim', voteCount: group._sum.voteCount });
+      }
+      return respond(topVoters);
     }
 
     // Free voting: count vote rows grouped by voter name across the event's categories.
@@ -350,18 +356,20 @@ router.get('/events/:eventId/top-voter', async (req, res) => {
       select: { id: true },
     });
     const categoryIds = categories.map((category) => category.id);
-    if (categoryIds.length === 0) return res.json({ topVoter: null });
+    if (categoryIds.length === 0) return respond([]);
 
     const grouped = await prisma.votingVote.groupBy({
       by: ['voterName'],
       where: { categoryId: { in: categoryIds }, voterName: { not: null } },
       _count: { _all: true },
       orderBy: { _count: { voterName: 'desc' } },
-      take: 1,
+      take: 3,
     });
-    const top = grouped[0];
-    if (!top || !top._count._all) return res.json({ topVoter: null });
-    return res.json({ topVoter: { name: top.voterName || 'Anonim', voteCount: top._count._all } });
+    return respond(
+      grouped
+        .filter((group) => group._count._all)
+        .map((group) => ({ name: group.voterName || 'Anonim', voteCount: group._count._all }))
+    );
   } catch (error) {
     res.status(500).json({ error: 'Gagal memuat voter terbanyak', detail: error.message });
   }

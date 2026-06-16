@@ -62,24 +62,20 @@ deploy_backend() {
 deploy_frontend() {
     echo "→ Deploying frontend..."
 
-    echo "  [1/5] git pull..."
+    echo "  [1/3] git pull..."
     cd "$FRONTEND_REPO"
     git checkout -- .
     git clean -fd
     git pull origin main
 
-    echo "  [2/5] npm install..."
-    cd "$FRONTEND_REPO/frontend"
-    npm install
-
-    echo "  [3/5] npm run build..."
-    npm run build
-
-    echo "  [4/5] copy build to live dir..."
+    # The frontend repo root IS the Vite app and ships a prebuilt dist/ in every
+    # commit, so deploy just publishes that committed build — no npm install/build
+    # on the server (avoids the old broken `cd frontend/frontend` path).
+    echo "  [2/3] publish committed dist to live dir..."
     rm -rf "$FRONTEND_LIVE"/assets "$FRONTEND_LIVE"/index.html "$FRONTEND_LIVE"/version.json
     cp -r dist/* "$FRONTEND_LIVE"/
 
-    echo "  [5/5] verify version..."
+    echo "  [3/3] verify version..."
     cat "$FRONTEND_LIVE/version.json"
 
     echo ""
