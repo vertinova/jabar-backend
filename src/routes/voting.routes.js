@@ -307,6 +307,66 @@ router.get('/events/:eventId', async (req, res) => {
   }
 });
 
+// Public: the single voter who cast the most votes in an event.
+// Paid voting is aggregated per buyer (by phone, the reliable per-person key);
+// free voting is aggregated per voter name. Returns { topVoter: { name, voteCount } | null }.
+router.get('/events/:eventId/top-voter', async (req, res) => {
+  try {
+    const eventId = toId(req.params.eventId);
+    if (!eventId) return res.status(400).json({ error: 'ID event tidak valid' });
+
+    const event = await prisma.rekomendasiEvent.findFirst({
+      where: {
+        id: eventId,
+        NOT: { status: 'DITOLAK' },
+        votingConfig: { is: { enabled: true, approvalStatus: 'APPROVED' } },
+      },
+      include: { votingConfig: { select: { isPaid: true } } },
+    });
+    if (!event) return res.status(404).json({ error: 'Event voting tidak ditemukan' });
+
+    if (event.votingConfig?.isPaid) {
+      const grouped = await prisma.votingPurchase.groupBy({
+        by: ['buyerPhone'],
+        where: { rekomendasiEventId: eventId, status: 'PAID', buyerPhone: { not: null } },
+        _sum: { voteCount: true },
+        orderBy: { _sum: { voteCount: 'desc' } },
+        take: 1,
+      });
+      const top = grouped[0];
+      if (!top || !top._sum.voteCount) return res.json({ topVoter: null });
+
+      const purchase = await prisma.votingPurchase.findFirst({
+        where: { rekomendasiEventId: eventId, status: 'PAID', buyerPhone: top.buyerPhone },
+        orderBy: { createdAt: 'desc' },
+        select: { buyerName: true },
+      });
+      return res.json({ topVoter: { name: purchase?.buyerName || 'Anonim', voteCount: top._sum.voteCount } });
+    }
+
+    // Free voting: count vote rows grouped by voter name across the event's categories.
+    const categories = await prisma.votingCategory.findMany({
+      where: { config: { rekomendasiEventId: eventId } },
+      select: { id: true },
+    });
+    const categoryIds = categories.map((category) => category.id);
+    if (categoryIds.length === 0) return res.json({ topVoter: null });
+
+    const grouped = await prisma.votingVote.groupBy({
+      by: ['voterName'],
+      where: { categoryId: { in: categoryIds }, voterName: { not: null } },
+      _count: { _all: true },
+      orderBy: { _count: { voterName: 'desc' } },
+      take: 1,
+    });
+    const top = grouped[0];
+    if (!top || !top._count._all) return res.json({ topVoter: null });
+    return res.json({ topVoter: { name: top.voterName || 'Anonim', voteCount: top._count._all } });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal memuat voter terbanyak', detail: error.message });
+  }
+});
+
 router.post('/vote', optionalAuthenticate, async (req, res) => {
   try {
     const categoryId = toId(req.body.categoryId);
