@@ -132,6 +132,9 @@ const generatePurchaseCode = () => {
 
 const QRIS_MAX_TRANSACTION = 10000000;
 const REFRESHABLE_PURCHASE_STATUSES = ['PENDING', 'CANCELLED', 'EXPIRED'];
+// Short checkout window so an abandoned QRIS expires quickly instead of lingering
+// PENDING until voting closes. Buyers who reopen simply get a fresh QRIS.
+const CHECKOUT_EXPIRY_SECONDS = (Number(process.env.VOTING_CHECKOUT_EXPIRY_MINUTES) || 15) * 60;
 
 const normalizePurchaseCode = (value) => {
   if (typeof value !== 'string') return '';
@@ -228,7 +231,7 @@ router.get('/events', async (req, res) => {
     const skip = (pageNum - 1) * limitNum;
 
     const where = {
-      status: 'DISETUJUI',
+      NOT: { status: 'DITOLAK' },
       votingConfig: { is: { enabled: true, approvalStatus: 'APPROVED' } },
     };
 
@@ -281,7 +284,7 @@ router.get('/events/:eventId', async (req, res) => {
     const event = await prisma.rekomendasiEvent.findFirst({
       where: {
         id: eventId,
-        status: 'DISETUJUI',
+        NOT: { status: 'DITOLAK' },
         votingConfig: { is: { enabled: true, approvalStatus: 'APPROVED' } },
       },
       include: {
@@ -469,12 +472,16 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
 
     if (totalAmount > 0) {
       midtransOrderId = purchaseCode;
-      // Expire the payment window at the voting close time so a QRIS code cannot
-      // be paid after voting has ended.
+      // Keep the checkout short-lived (so abandoned QRIS expires fast) but never
+      // let it outlive the voting close time (a QRIS must not be payable after
+      // voting ends).
       const votingEndDate = config.endDate ? new Date(config.endDate) : null;
-      const expiryDurationSeconds = votingEndDate
+      const secondsUntilClose = votingEndDate
         ? Math.floor((votingEndDate.getTime() - Date.now()) / 1000)
         : null;
+      const expiryDurationSeconds = secondsUntilClose != null
+        ? Math.min(CHECKOUT_EXPIRY_SECONDS, secondsUntilClose)
+        : CHECKOUT_EXPIRY_SECONDS;
       const snapResult = await createSnapTransaction({
         orderId: midtransOrderId,
         grossAmount: totalAmount,

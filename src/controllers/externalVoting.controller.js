@@ -87,33 +87,58 @@ const updateApproval = async (req, res) => {
       }
     }
 
+    const approvalNote = req.body.approvalNote || null;
+    const approvalDate = new Date();
     const data = {
       approvalStatus,
-      approvalNote: req.body.approvalNote || null,
-      approvedAt: approvalStatus === 'APPROVED' ? new Date() : null,
+      approvalNote,
+      approvedAt: approvalStatus === 'APPROVED' ? approvalDate : null,
       ...(Number.isFinite(organizerSharePercent) && { organizerSharePercent }),
       ...(Number.isFinite(pengdaSharePercent) && { pengdaSharePercent }),
       ...(approvalStatus !== 'APPROVED' && { enabled: false }),
     };
+    const eventStatusData = {
+      ...(approvalStatus === 'APPROVED' && {
+        status: 'DISETUJUI',
+        approvedPengdaAt: approvalDate,
+        ...(approvalNote && { catatanAdmin: approvalNote }),
+      }),
+      ...(approvalStatus === 'REJECTED' && {
+        status: 'DITOLAK',
+        ...(approvalNote && { catatanAdmin: approvalNote }),
+      }),
+    };
 
-    const config = await prisma.eventVotingConfig.upsert({
-      where: { rekomendasiEventId: eventId },
-      create: { rekomendasiEventId: eventId, ...data },
-      update: data,
-      include: {
-        categories: {
-          orderBy: { order: 'asc' },
-          include: {
-            nominees: { orderBy: { voteCount: 'desc' } },
-            _count: { select: { nominees: true, votes: true } },
+    const [updatedEvent, config] = await prisma.$transaction([
+      Object.keys(eventStatusData).length
+        ? prisma.rekomendasiEvent.update({
+            where: { id: eventId },
+            data: eventStatusData,
+            select: { id: true, namaEvent: true, status: true },
+          })
+        : prisma.rekomendasiEvent.findUnique({
+            where: { id: eventId },
+            select: { id: true, namaEvent: true, status: true },
+          }),
+      prisma.eventVotingConfig.upsert({
+        where: { rekomendasiEventId: eventId },
+        create: { rekomendasiEventId: eventId, ...data },
+        update: data,
+        include: {
+          categories: {
+            orderBy: { order: 'asc' },
+            include: {
+              nominees: { orderBy: { voteCount: 'desc' } },
+              _count: { select: { nominees: true, votes: true } },
+            },
           },
         },
-      },
-    });
+      }),
+    ]);
 
     res.json({
       message: `Status e-voting ${event.namaEvent} diperbarui menjadi ${approvalStatus}`,
-      event: { ...event, votingConfig: normalizeConfig(config) },
+      event: { ...event, status: updatedEvent.status, votingConfig: normalizeConfig(config) },
     });
   } catch (error) {
     res.status(500).json({ error: 'Gagal memperbarui approval e-voting', detail: error.message });
