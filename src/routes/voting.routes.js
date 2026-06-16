@@ -374,8 +374,12 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
     const eventId = toId(req.body.eventId);
     const voteCount = Number(req.body.voteCount);
     const { categoryId, nomineeId, buyerName, buyerEmail, buyerPhone } = req.body;
-    if (!eventId || !buyerName || !buyerEmail) {
-      return res.status(400).json({ error: 'Event, nama, dan email pembeli wajib diisi' });
+    const normalizedBuyerName = String(buyerName || '').trim();
+    const normalizedBuyerPhone = String(buyerPhone || '').trim();
+    const providedBuyerEmail = String(buyerEmail || req.user?.email || '').trim().toLowerCase();
+
+    if (!eventId || !normalizedBuyerName || !normalizedBuyerPhone) {
+      return res.status(400).json({ error: 'Event, nama, dan nomor telepon pembeli wajib diisi' });
     }
 
     if (!Number.isInteger(voteCount) || voteCount < 1) {
@@ -383,7 +387,7 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(buyerEmail)) {
+    if (providedBuyerEmail && !emailRegex.test(providedBuyerEmail)) {
       return res.status(400).json({ error: 'Format email tidak valid' });
     }
 
@@ -436,15 +440,16 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
     }
 
     const purchaseCode = generatePurchaseCode();
+    const resolvedBuyerEmail = providedBuyerEmail || `${purchaseCode.toLowerCase()}@vote.forbasi.local`;
     const voterIp = getClientIp(req);
 
     const purchase = await prisma.$transaction(async (tx) => {
       const created = await tx.votingPurchase.create({
         data: {
           rekomendasiEventId: eventId,
-          buyerName,
-          buyerEmail,
-          buyerPhone: buyerPhone || null,
+          buyerName: normalizedBuyerName,
+          buyerEmail: resolvedBuyerEmail,
+          buyerPhone: normalizedBuyerPhone,
           categoryId: votingTarget.category.id,
           nomineeId: votingTarget.nominee.id,
           voteCount,
@@ -485,9 +490,9 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
       const snapResult = await createSnapTransaction({
         orderId: midtransOrderId,
         grossAmount: totalAmount,
-        customerName: buyerName,
-        customerEmail: buyerEmail,
-        customerPhone: buyerPhone,
+        customerName: normalizedBuyerName,
+        customerEmail: resolvedBuyerEmail,
+        customerPhone: normalizedBuyerPhone,
         adminFee,
         itemDetails: [
           {
