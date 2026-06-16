@@ -1073,6 +1073,17 @@ router.put('/admin/event/:eventId/config', authenticate, canManageVoting, async 
       include: includeConfig,
     });
 
+    // A publicly-enabled voting must have its event marked DISETUJUI, otherwise
+    // the public listing and /purchase reject it ("Voting berbayar tidak
+    // tersedia"). Enabling already requires approvalStatus APPROVED, so keep the
+    // event status in sync here. Idempotent: only touches events not yet DISETUJUI.
+    if (data.enabled) {
+      await prisma.rekomendasiEvent.updateMany({
+        where: { id: eventId, status: { not: 'DISETUJUI' } },
+        data: { status: 'DISETUJUI', approvedPengdaAt: new Date() },
+      });
+    }
+
     res.json(normalizeVotingConfig(config));
   } catch (error) {
     res.status(500).json({ error: 'Gagal menyimpan konfigurasi voting', detail: error.message });
