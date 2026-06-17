@@ -1221,16 +1221,6 @@ router.put('/admin/event/:eventId/config', authenticate, canManageVoting, async 
       startDate: req.body.startDate ? new Date(req.body.startDate) : null,
       endDate: req.body.endDate ? new Date(req.body.endDate) : null,
     };
-    if (isAdminRole(req.user?.role) && req.body.developerSharePercent !== undefined) {
-      const developerSharePercent = clampPercent(req.body.developerSharePercent);
-      const pengdaSharePercent = decimalToNumber(existingConfig?.pengdaSharePercent);
-      if (developerSharePercent > pengdaSharePercent) {
-        return res.status(400).json({
-          error: `Persentase developer tidak boleh melebihi bagian Pengda (${pengdaSharePercent}%).`,
-        });
-      }
-      data.developerSharePercent = developerSharePercent;
-    }
 
     const config = await prisma.eventVotingConfig.upsert({
       where: { rekomendasiEventId: eventId },
@@ -1253,6 +1243,41 @@ router.put('/admin/event/:eventId/config', authenticate, canManageVoting, async 
     res.json(normalizeVotingConfig(config));
   } catch (error) {
     res.status(500).json({ error: 'Gagal menyimpan konfigurasi voting', detail: error.message });
+  }
+});
+
+router.patch('/admin/event/:eventId/developer-share', authenticate, canManageVoting, async (req, res) => {
+  try {
+    if (req.user?.role !== 'SUPERADMIN') {
+      return res.status(403).json({ error: 'Hanya super admin yang dapat mengatur persentase developer' });
+    }
+
+    const eventId = toId(req.params.eventId);
+    if (!eventId) return res.status(400).json({ error: 'ID event tidak valid' });
+
+    const existingConfig = await prisma.eventVotingConfig.findUnique({
+      where: { rekomendasiEventId: eventId },
+      select: { pengdaSharePercent: true },
+    });
+    if (!existingConfig) return res.status(404).json({ error: 'Konfigurasi voting tidak ditemukan' });
+
+    const developerSharePercent = clampPercent(req.body.developerSharePercent);
+    const pengdaSharePercent = decimalToNumber(existingConfig.pengdaSharePercent);
+    if (developerSharePercent > pengdaSharePercent) {
+      return res.status(400).json({
+        error: `Persentase developer tidak boleh melebihi bagian Pengda (${pengdaSharePercent}%).`,
+      });
+    }
+
+    const config = await prisma.eventVotingConfig.update({
+      where: { rekomendasiEventId: eventId },
+      data: { developerSharePercent },
+      include: includeConfig,
+    });
+
+    res.json(normalizeVotingConfig(config));
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal menyimpan persentase developer', detail: error.message });
   }
 });
 
