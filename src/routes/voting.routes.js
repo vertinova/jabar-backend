@@ -64,6 +64,18 @@ const toPositiveInteger = (value) => {
 };
 
 const decimalToNumber = (value) => (value === null || value === undefined ? 0 : Number(value));
+const clampPercent = (value, max = 100) => Math.min(Math.max(Number(value) || 0, 0), max);
+
+const splitPengdaDeveloper = (grossRevenue, pengdaShareAmount, developerSharePercent) => {
+  const developerShare = Math.min(
+    decimalToNumber(pengdaShareAmount),
+    Math.round((decimalToNumber(grossRevenue) * clampPercent(developerSharePercent)) / 100)
+  );
+  return {
+    developerShare,
+    pengdaNetShare: Math.max(0, decimalToNumber(pengdaShareAmount) - developerShare),
+  };
+};
 
 const normalizeVotingConfig = (config) => {
   if (!config) return config;
@@ -72,6 +84,7 @@ const normalizeVotingConfig = (config) => {
     pricePerVote: decimalToNumber(config.pricePerVote),
     organizerSharePercent: decimalToNumber(config.organizerSharePercent),
     pengdaSharePercent: decimalToNumber(config.pengdaSharePercent),
+    developerSharePercent: decimalToNumber(config.developerSharePercent),
   };
 };
 
@@ -970,6 +983,7 @@ router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
               approvalStatus: true,
               organizerSharePercent: true,
               pengdaSharePercent: true,
+              developerSharePercent: true,
             },
           },
         },
@@ -993,6 +1007,8 @@ router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
       grossRevenue: decimalToNumber(paidTotals._sum.totalAmount),
       organizerBalance,
       pengdaShare: decimalToNumber(paidTotals._sum.pengdaShareAmount),
+      developerShare: 0,
+      pengdaNetShare: decimalToNumber(paidTotals._sum.pengdaShareAmount),
       adminFee: decimalToNumber(paidTotals._sum.adminFee),
       qrisFee: decimalToNumber(paidTotals._sum.qrisFee),
       paidVotes: paidTotals._sum.voteCount || 0,
@@ -1005,6 +1021,10 @@ router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
     const paidEventMap = new Map(paidByEvent.map((item) => [item.rekomendasiEventId, item]));
     const eventSummaries = events.map((event) => {
       const paid = paidEventMap.get(event.id);
+      const grossRevenue = decimalToNumber(paid?._sum.totalAmount);
+      const pengdaShare = decimalToNumber(paid?._sum.pengdaShareAmount);
+      const developerSharePercent = decimalToNumber(event.votingConfig?.developerSharePercent);
+      const split = splitPengdaDeveloper(grossRevenue, pengdaShare, developerSharePercent);
       return {
         eventId: event.id,
         eventName: event.namaEvent,
@@ -1013,13 +1033,19 @@ router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
         approvalStatus: event.votingConfig?.approvalStatus || 'PENDING',
         organizerSharePercent: decimalToNumber(event.votingConfig?.organizerSharePercent),
         pengdaSharePercent: decimalToNumber(event.votingConfig?.pengdaSharePercent),
-        grossRevenue: decimalToNumber(paid?._sum.totalAmount),
+        developerSharePercent,
+        pengdaNetSharePercent: Math.max(0, decimalToNumber(event.votingConfig?.pengdaSharePercent) - developerSharePercent),
+        grossRevenue,
         organizerBalance: decimalToNumber(paid?._sum.organizerShareAmount),
-        pengdaShare: decimalToNumber(paid?._sum.pengdaShareAmount),
+        pengdaShare,
+        developerShare: split.developerShare,
+        pengdaNetShare: split.pengdaNetShare,
         paidVotes: paid?._sum.voteCount || 0,
         paidTransactions: paid?._count || 0,
       };
     });
+    summary.developerShare = eventSummaries.reduce((sum, event) => sum + event.developerShare, 0);
+    summary.pengdaNetShare = eventSummaries.reduce((sum, event) => sum + event.pengdaNetShare, 0);
 
     res.json({
       summary,
@@ -1180,7 +1206,7 @@ router.put('/admin/event/:eventId/config', authenticate, canManageVoting, async 
 
     const existingConfig = await prisma.eventVotingConfig.findUnique({
       where: { rekomendasiEventId: eventId },
-      select: { approvalStatus: true },
+      select: { approvalStatus: true, pengdaSharePercent: true },
     });
     if (req.body.enabled && existingConfig?.approvalStatus !== 'APPROVED') {
       return res.status(400).json({
@@ -1195,6 +1221,16 @@ router.put('/admin/event/:eventId/config', authenticate, canManageVoting, async 
       startDate: req.body.startDate ? new Date(req.body.startDate) : null,
       endDate: req.body.endDate ? new Date(req.body.endDate) : null,
     };
+    if (isAdminRole(req.user?.role) && req.body.developerSharePercent !== undefined) {
+      const developerSharePercent = clampPercent(req.body.developerSharePercent);
+      const pengdaSharePercent = decimalToNumber(existingConfig?.pengdaSharePercent);
+      if (developerSharePercent > pengdaSharePercent) {
+        return res.status(400).json({
+          error: `Persentase developer tidak boleh melebihi bagian Pengda (${pengdaSharePercent}%).`,
+        });
+      }
+      data.developerSharePercent = developerSharePercent;
+    }
 
     const config = await prisma.eventVotingConfig.upsert({
       where: { rekomendasiEventId: eventId },

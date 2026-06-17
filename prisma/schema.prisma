@@ -169,6 +169,7 @@ model EventVotingConfig {
   approvalStatus        VotingApprovalStatus @default(PENDING) @map("approval_status")
   organizerSharePercent Decimal              @default(0) @map("organizer_share_percent") @db.Decimal(5, 2)
   pengdaSharePercent    Decimal              @default(0) @map("pengda_share_percent") @db.Decimal(5, 2)
+  developerSharePercent Decimal              @default(0) @map("developer_share_percent") @db.Decimal(5, 2)
   approvalNote          String?              @map("approval_note") @db.Text
   approvedAt            DateTime?            @map("approved_at")
   startDate             DateTime?            @map("start_date")
