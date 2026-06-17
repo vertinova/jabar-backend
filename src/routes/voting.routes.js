@@ -308,9 +308,10 @@ router.get('/events/:eventId', async (req, res) => {
 });
 
 // Public: the top 3 voters who cast the most votes in an event.
-// Paid voting is aggregated per buyer (by phone, the reliable per-person key);
-// free voting is aggregated per voter name. Returns { topVoters: [{ name, voteCount }] }
-// ordered desc (also keeps `topVoter` = first entry for backward compatibility).
+// Count actual vote rows so the leaderboard always matches the applied nominee
+// totals. Paid voting is grouped per buyer phone; free voting per voter name.
+// Returns { topVoters: [{ name, voteCount, details }] } ordered desc (also keeps
+// `topVoter` = first entry for backward compatibility).
 router.get('/events/:eventId/top-voter', async (req, res) => {
   try {
     const eventId = toId(req.params.eventId);
@@ -329,24 +330,58 @@ router.get('/events/:eventId/top-voter', async (req, res) => {
     const respond = (topVoters) => res.json({ topVoters, topVoter: topVoters[0] || null });
 
     if (event.votingConfig?.isPaid) {
-      const grouped = await prisma.votingPurchase.groupBy({
-        by: ['buyerPhone'],
-        where: { rekomendasiEventId: eventId, status: 'PAID', buyerPhone: { not: null } },
-        _sum: { voteCount: true },
-        orderBy: { _sum: { voteCount: 'desc' } },
-        take: 3,
+      const votes = await prisma.votingVote.findMany({
+        where: {
+          category: { config: { rekomendasiEventId: eventId } },
+          purchase: { status: 'PAID', buyerPhone: { not: null } },
+        },
+        select: {
+          category: { select: { title: true } },
+          nominee: { select: { nomineeName: true } },
+          purchase: {
+            select: {
+              buyerPhone: true,
+              buyerName: true,
+              createdAt: true,
+            },
+          },
+        },
       });
 
-      const topVoters = [];
-      for (const group of grouped) {
-        if (!group._sum.voteCount) continue;
-        const purchase = await prisma.votingPurchase.findFirst({
-          where: { rekomendasiEventId: eventId, status: 'PAID', buyerPhone: group.buyerPhone },
-          orderBy: { createdAt: 'desc' },
-          select: { buyerName: true },
-        });
-        topVoters.push({ name: purchase?.buyerName || 'Anonim', voteCount: group._sum.voteCount });
+      const voterMap = new Map();
+      for (const vote of votes) {
+        const purchase = vote.purchase;
+        if (!purchase?.buyerPhone) continue;
+        const current = voterMap.get(purchase.buyerPhone) || {
+          name: purchase.buyerName || 'Anonim',
+          voteCount: 0,
+          latestPurchaseAt: null,
+          details: new Map(),
+        };
+        current.voteCount += 1;
+        const detailKey = `${vote.category?.title || 'Tanpa kategori'}|${vote.nominee?.nomineeName || 'Tanpa nominee'}`;
+        const detail = current.details.get(detailKey) || {
+          category: vote.category?.title || 'Tanpa kategori',
+          nominee: vote.nominee?.nomineeName || 'Tanpa nominee',
+          voteCount: 0,
+        };
+        detail.voteCount += 1;
+        current.details.set(detailKey, detail);
+        if (!current.latestPurchaseAt || purchase.createdAt > current.latestPurchaseAt) {
+          current.name = purchase.buyerName || current.name;
+          current.latestPurchaseAt = purchase.createdAt;
+        }
+        voterMap.set(purchase.buyerPhone, current);
       }
+
+      const topVoters = Array.from(voterMap.values())
+        .sort((a, b) => b.voteCount - a.voteCount)
+        .slice(0, 3)
+        .map(({ name, voteCount, details }) => ({
+          name,
+          voteCount,
+          details: Array.from(details.values()).sort((a, b) => b.voteCount - a.voteCount),
+        }));
       return respond(topVoters);
     }
 
@@ -365,11 +400,33 @@ router.get('/events/:eventId/top-voter', async (req, res) => {
       orderBy: { _count: { voterName: 'desc' } },
       take: 3,
     });
-    return respond(
-      grouped
-        .filter((group) => group._count._all)
-        .map((group) => ({ name: group.voterName || 'Anonim', voteCount: group._count._all }))
-    );
+    const topVoters = [];
+    for (const group of grouped.filter((item) => item._count._all)) {
+      const detailVotes = await prisma.votingVote.findMany({
+        where: { categoryId: { in: categoryIds }, voterName: group.voterName },
+        select: {
+          category: { select: { title: true } },
+          nominee: { select: { nomineeName: true } },
+        },
+      });
+      const details = new Map();
+      for (const vote of detailVotes) {
+        const detailKey = `${vote.category?.title || 'Tanpa kategori'}|${vote.nominee?.nomineeName || 'Tanpa nominee'}`;
+        const detail = details.get(detailKey) || {
+          category: vote.category?.title || 'Tanpa kategori',
+          nominee: vote.nominee?.nomineeName || 'Tanpa nominee',
+          voteCount: 0,
+        };
+        detail.voteCount += 1;
+        details.set(detailKey, detail);
+      }
+      topVoters.push({
+        name: group.voterName || 'Anonim',
+        voteCount: group._count._all,
+        details: Array.from(details.values()).sort((a, b) => b.voteCount - a.voteCount),
+      });
+    }
+    return respond(topVoters);
   } catch (error) {
     res.status(500).json({ error: 'Gagal memuat voter terbanyak', detail: error.message });
   }
