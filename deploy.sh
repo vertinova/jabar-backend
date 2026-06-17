@@ -71,9 +71,18 @@ deploy_frontend() {
     # The frontend repo root IS the Vite app and ships a prebuilt dist/ in every
     # commit, so deploy just publishes that committed build — no npm install/build
     # on the server (avoids the old broken `cd frontend/frontend` path).
+    if [ -d "$FRONTEND_REPO/frontend/dist" ]; then
+        PUBLISH_DIST="$FRONTEND_REPO/frontend/dist"
+    elif [ -d "$FRONTEND_REPO/dist" ]; then
+        PUBLISH_DIST="$FRONTEND_REPO/dist"
+    else
+        echo "Frontend dist folder not found"
+        exit 1
+    fi
+
     echo "  [2/3] publish committed dist to live dir..."
     rm -rf "$FRONTEND_LIVE"/assets "$FRONTEND_LIVE"/index.html "$FRONTEND_LIVE"/version.json
-    cp -r dist/* "$FRONTEND_LIVE"/
+    cp -r "$PUBLISH_DIST"/* "$FRONTEND_LIVE"/
 
     echo "  [3/3] verify version..."
     cat "$FRONTEND_LIVE/version.json"
