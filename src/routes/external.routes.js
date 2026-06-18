@@ -64,6 +64,18 @@ const handlePosterUpload = (req, res, next) => {
   });
 };
 
+const handleLandingLogoUpload = (req, res, next) => {
+  upload.single('logo')(req, res, (err) => {
+    if (err) {
+      const msg = err.code === 'LIMIT_FILE_SIZE'
+        ? 'Ukuran file logo terlalu besar. Maksimal 10MB.'
+        : err.message || 'Gagal upload logo';
+      return res.status(400).json({ error: msg });
+    }
+    next();
+  });
+};
+
 // ══════════════════════════════════════════
 // PUBLIC ROUTES (no API key needed)
 // ══════════════════════════════════════════
@@ -181,6 +193,8 @@ router.delete('/landing/feedback/:id', requirePermission('landing:delete'), land
 // Site Config (landing)
 router.get('/landing/config', requirePermission('landing:read'), landingCtrl.getSiteConfig);
 router.put('/landing/config', requirePermission('landing:write'), landingCtrl.updateSiteConfig);
+router.post('/landing/sponsor-logo', requirePermission('landing:write'), handleLandingLogoUpload, landingCtrl.uploadSponsorLogo);
+router.post('/landing/mitra-logo', requirePermission('landing:write'), handleLandingLogoUpload, landingCtrl.uploadMitraLogo);
 
 // Merchandise
 router.get('/landing/merchandise', requirePermission('landing:read'), landingCtrl.getMerchandise);

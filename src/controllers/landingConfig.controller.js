@@ -1,10 +1,12 @@
 const prisma = require('../lib/prisma');
 const fs = require('fs');
 const path = require('path');
+const sharp = require('sharp');
 
 // ── Helper: resolve upload path from DB value ──
 // DB stores "/uploads/filename.jpg", we resolve to absolute filesystem path
 const UPLOAD_DIR = path.join(__dirname, '..', '..', 'uploads');
+const ALLOWED_LOGO_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 function resolveFilePath(dbPath) {
   if (!dbPath) return null;
@@ -36,6 +38,66 @@ function verifyUpload(file) {
   }
   return exists;
 }
+
+async function uploadRegionalLogo(req, res, type) {
+  const labels = { sponsor: 'sponsor', mitra: 'mitra' };
+  const label = labels[type];
+
+  try {
+    if (!label) return res.status(400).json({ error: 'Tipe logo tidak valid' });
+    if (!req.file) return res.status(400).json({ error: 'File logo wajib diunggah' });
+
+    if (!ALLOWED_LOGO_MIME_TYPES.has(req.file.mimetype)) {
+      safeDeleteTempUpload(req.file);
+      return res.status(400).json({ error: 'Tipe file tidak diizinkan. Gunakan JPG, JPEG, PNG, atau WEBP.' });
+    }
+
+    const targetDir = path.join(UPLOAD_DIR, 'regional', 'jabar', label);
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    const filename = `${Date.now()}-${Math.round(Math.random() * 1E9)}.webp`;
+    const outputPath = path.join(targetDir, filename);
+    const publicPath = `/uploads/regional/jabar/${label}/${filename}`;
+
+    await sharp(req.file.path)
+      .rotate()
+      .resize({
+        width: 1200,
+        height: 600,
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
+      .webp({ quality: 82 })
+      .toFile(outputPath);
+
+    safeDeleteTempUpload(req.file);
+
+    res.json({
+      success: true,
+      message: `Logo ${label} berhasil diunggah dan dikonversi ke WebP`,
+      data: {
+        path: publicPath,
+        url: publicPath,
+        mime_type: 'image/webp',
+      },
+    });
+  } catch (error) {
+    safeDeleteTempUpload(req.file);
+    console.error(`[Landing] upload ${label || type} logo error:`, error.message);
+    res.status(500).json({ error: 'Gagal mengunggah dan mengonversi logo' });
+  }
+}
+
+function safeDeleteTempUpload(file) {
+  try {
+    if (file?.path && fs.existsSync(file.path)) fs.unlinkSync(file.path);
+  } catch (err) {
+    console.error('[Landing] Failed to delete temp upload:', err.message);
+  }
+}
+
+const uploadSponsorLogo = (req, res) => uploadRegionalLogo(req, res, 'sponsor');
+const uploadMitraLogo = (req, res) => uploadRegionalLogo(req, res, 'mitra');
 
 // ══════════════════════════════════════════
 // HERO SLIDES
@@ -491,7 +553,7 @@ module.exports = {
   // Feedback
   getFeedback, submitFeedback, markFeedbackRead, deleteFeedback,
   // Config
-  getSiteConfig, updateSiteConfig,
+  getSiteConfig, updateSiteConfig, uploadSponsorLogo, uploadMitraLogo,
   // Struktur Organisasi
   getStruktur, createStruktur, updateStruktur, deleteStruktur,
   // Merchandise
