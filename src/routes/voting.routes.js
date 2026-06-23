@@ -355,6 +355,7 @@ router.get('/events/:eventId/top-voter', async (req, res) => {
             select: {
               buyerPhone: true,
               buyerName: true,
+              supportMessage: true,
               createdAt: true,
             },
           },
@@ -367,6 +368,7 @@ router.get('/events/:eventId/top-voter', async (req, res) => {
         if (!purchase?.buyerPhone) continue;
         const current = voterMap.get(purchase.buyerPhone) || {
           name: purchase.buyerName || 'Anonim',
+          message: '',
           voteCount: 0,
           latestPurchaseAt: null,
           details: new Map(),
@@ -382,6 +384,7 @@ router.get('/events/:eventId/top-voter', async (req, res) => {
         current.details.set(detailKey, detail);
         if (!current.latestPurchaseAt || purchase.createdAt > current.latestPurchaseAt) {
           current.name = purchase.buyerName || current.name;
+          if (purchase.supportMessage?.trim()) current.message = purchase.supportMessage.trim();
           current.latestPurchaseAt = purchase.createdAt;
         }
         voterMap.set(purchase.buyerPhone, current);
@@ -390,8 +393,9 @@ router.get('/events/:eventId/top-voter', async (req, res) => {
       const topVoters = Array.from(voterMap.values())
         .sort((a, b) => b.voteCount - a.voteCount)
         .slice(0, 3)
-        .map(({ name, voteCount, details }) => ({
+        .map(({ name, message, voteCount, details }) => ({
           name,
+          message,
           voteCount,
           details: Array.from(details.values()).sort((a, b) => b.voteCount - a.voteCount),
         }));
@@ -435,6 +439,7 @@ router.get('/events/:eventId/top-voter', async (req, res) => {
       }
       topVoters.push({
         name: group.voterName || 'Anonim',
+        message: '',
         voteCount: group._count._all,
         details: Array.from(details.values()).sort((a, b) => b.voteCount - a.voteCount),
       });
@@ -442,38 +447,6 @@ router.get('/events/:eventId/top-voter', async (req, res) => {
     return respond(topVoters);
   } catch (error) {
     res.status(500).json({ error: 'Gagal memuat voter terbanyak', detail: error.message });
-  }
-});
-
-// Voter-submitted encouragement messages for an event's running-text ticker.
-// Only paid purchases that actually granted votes are shown, newest first.
-router.get('/events/:eventId/cheers', async (req, res) => {
-  try {
-    const eventId = toId(req.params.eventId);
-    if (!eventId) return res.status(400).json({ error: 'ID event tidak valid' });
-
-    const purchases = await prisma.votingPurchase.findMany({
-      where: {
-        rekomendasiEventId: eventId,
-        status: 'PAID',
-        supportMessage: { not: null },
-      },
-      orderBy: { paidAt: 'desc' },
-      take: 30,
-      select: { buyerName: true, supportMessage: true, voteCount: true, paidAt: true },
-    });
-
-    const cheers = purchases
-      .filter((purchase) => purchase.supportMessage?.trim())
-      .map((purchase) => ({
-        name: purchase.buyerName || 'Anonim',
-        message: purchase.supportMessage.trim(),
-        voteCount: purchase.voteCount,
-      }));
-
-    res.json({ cheers });
-  } catch (error) {
-    res.status(500).json({ error: 'Gagal memuat pesan semangat', detail: error.message });
   }
 });
 
