@@ -248,6 +248,7 @@ model VotingPurchase {
   buyerName             String               @map("buyer_name")
   buyerEmail            String               @map("buyer_email")
   buyerPhone            String?              @map("buyer_phone")
+  supportMessage        String?              @map("support_message") @db.VarChar(200)
   categoryId            Int?                 @map("category_id")
   nomineeId             Int?                 @map("nominee_id")
   voteCount             Int                  @default(1) @map("vote_count")

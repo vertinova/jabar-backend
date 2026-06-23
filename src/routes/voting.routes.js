@@ -445,6 +445,38 @@ router.get('/events/:eventId/top-voter', async (req, res) => {
   }
 });
 
+// Voter-submitted encouragement messages for an event's running-text ticker.
+// Only paid purchases that actually granted votes are shown, newest first.
+router.get('/events/:eventId/cheers', async (req, res) => {
+  try {
+    const eventId = toId(req.params.eventId);
+    if (!eventId) return res.status(400).json({ error: 'ID event tidak valid' });
+
+    const purchases = await prisma.votingPurchase.findMany({
+      where: {
+        rekomendasiEventId: eventId,
+        status: 'PAID',
+        supportMessage: { not: null },
+      },
+      orderBy: { paidAt: 'desc' },
+      take: 30,
+      select: { buyerName: true, supportMessage: true, voteCount: true, paidAt: true },
+    });
+
+    const cheers = purchases
+      .filter((purchase) => purchase.supportMessage?.trim())
+      .map((purchase) => ({
+        name: purchase.buyerName || 'Anonim',
+        message: purchase.supportMessage.trim(),
+        voteCount: purchase.voteCount,
+      }));
+
+    res.json({ cheers });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal memuat pesan semangat', detail: error.message });
+  }
+});
+
 router.post('/vote', optionalAuthenticate, async (req, res) => {
   try {
     const categoryId = toId(req.body.categoryId);
@@ -511,9 +543,10 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
   try {
     const eventId = toId(req.body.eventId);
     const voteCount = Number(req.body.voteCount);
-    const { categoryId, nomineeId, buyerName, buyerEmail, buyerPhone } = req.body;
+    const { categoryId, nomineeId, buyerName, buyerEmail, buyerPhone, supportMessage } = req.body;
     const normalizedBuyerName = String(buyerName || '').trim();
     const normalizedBuyerPhone = String(buyerPhone || '').trim();
+    const normalizedSupportMessage = String(supportMessage || '').trim().slice(0, 200) || null;
     const providedBuyerEmail = String(buyerEmail || req.user?.email || '').trim().toLowerCase();
 
     if (!eventId || !normalizedBuyerName || !normalizedBuyerPhone) {
@@ -588,6 +621,7 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
           buyerName: normalizedBuyerName,
           buyerEmail: resolvedBuyerEmail,
           buyerPhone: normalizedBuyerPhone,
+          supportMessage: normalizedSupportMessage,
           categoryId: votingTarget.category.id,
           nomineeId: votingTarget.nominee.id,
           voteCount,
