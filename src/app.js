@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const imageOptimizer = require('./middleware/imageOptimizer.middleware');
 
 const authRoutes = require('./routes/auth.routes');
 const pengcabRoutes = require('./routes/pengcab.routes');
@@ -28,6 +29,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+// Sajikan WebP teroptimasi on-the-fly (cache di disk); fallback ke file asli.
+app.use('/uploads', imageOptimizer);
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
 // Routes
