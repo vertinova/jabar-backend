@@ -298,6 +298,9 @@ model WithdrawalRequest {
   note          String?          @db.Text
   status        WithdrawalStatus @default(PENDING)
   adminNote     String?          @map("admin_note") @db.Text
+  // Snapshot of the organizer's remaining balance (saldo akhir) at the moment
+  // this withdrawal was marked PAID. Null until paid.
+  balanceAfter  Decimal?         @map("balance_after") @db.Decimal(12, 2)
   processedById Int?             @map("processed_by_id")
   processedAt   DateTime?        @map("processed_at")
   createdAt     DateTime         @default(now()) @map("created_at")

@@ -1484,6 +1484,8 @@ const serializeWithdrawal = (item) => ({
   status: item.status,
   statusLabel: withdrawalStatusLabel[item.status] || item.status,
   adminNote: item.adminNote,
+  // Saldo akhir snapshot (remaining balance after this withdrawal was paid); null until PAID.
+  balanceAfter: item.balanceAfter === null || item.balanceAfter === undefined ? null : decimalToNumber(item.balanceAfter),
   processedById: item.processedById,
   processedAt: item.processedAt,
   createdAt: item.createdAt,
@@ -1505,6 +1507,22 @@ const computeAvailableBalance = async (userId) => {
   const organizerBalance = decimalToNumber(paidAgg._sum.organizerShareAmount);
   const reserved = decimalToNumber(withdrawalAgg._sum.amount);
   return { organizerBalance, reserved, availableBalance: Math.max(0, organizerBalance - reserved) };
+};
+
+// Saldo akhir = total organizer earnings minus everything already cashed out (PAID).
+// Call after a withdrawal's status is set to PAID to snapshot the remaining balance.
+const computeRemainingBalance = async (userId) => {
+  const [paidAgg, withdrawnAgg] = await Promise.all([
+    prisma.votingPurchase.aggregate({
+      where: { status: 'PAID', event: { userId } },
+      _sum: { organizerShareAmount: true },
+    }),
+    prisma.withdrawalRequest.aggregate({
+      where: { userId, status: 'PAID' },
+      _sum: { amount: true },
+    }),
+  ]);
+  return Math.max(0, decimalToNumber(paidAgg._sum.organizerShareAmount) - decimalToNumber(withdrawnAgg._sum.amount));
 };
 
 // List withdrawals (own for penyelenggara, all for admin)
@@ -1600,7 +1618,7 @@ router.patch('/admin/withdrawals/:id', authenticate, async (req, res) => {
     const existing = await prisma.withdrawalRequest.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Pengajuan tidak ditemukan' });
 
-    const updated = await prisma.withdrawalRequest.update({
+    let updated = await prisma.withdrawalRequest.update({
       where: { id },
       data: {
         status,
@@ -1610,6 +1628,17 @@ router.patch('/admin/withdrawals/:id', authenticate, async (req, res) => {
       },
       include: { user: { select: { name: true, email: true } } },
     });
+
+    // Record the saldo akhir mutation once the money is actually transferred.
+    if (status === 'PAID') {
+      const balanceAfter = await computeRemainingBalance(existing.userId);
+      updated = await prisma.withdrawalRequest.update({
+        where: { id },
+        data: { balanceAfter },
+        include: { user: { select: { name: true, email: true } } },
+      });
+    }
+
     res.json({ message: 'Status pencairan diperbarui', withdrawal: serializeWithdrawal(updated) });
   } catch (error) {
     res.status(500).json({ error: 'Gagal memperbarui pencairan', detail: error.message });
