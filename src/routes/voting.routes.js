@@ -996,19 +996,23 @@ router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
         },
       }),
       prisma.withdrawalRequest.groupBy({
-        by: ['status'],
+        by: ['status', 'beneficiaryType'],
         where: withdrawalWhere,
         _sum: { amount: true },
       }),
     ]);
 
-    const withdrawalSum = (statuses) => withdrawalByStatus
-      .filter((item) => statuses.includes(item.status))
+    // Organizer balances come from the penyelenggara request flow (beneficiaryType ORGANIZER).
+    // Pengda/Developer payouts are separate pools recorded directly by super admin.
+    const withdrawalSum = (statuses, beneficiary = 'ORGANIZER') => withdrawalByStatus
+      .filter((item) => statuses.includes(item.status) && item.beneficiaryType === beneficiary)
       .reduce((sum, item) => sum + decimalToNumber(item._sum.amount), 0);
     const organizerBalance = decimalToNumber(paidTotals._sum.organizerShareAmount);
     const pendingWithdrawal = withdrawalSum(['PENDING', 'APPROVED']);
     const withdrawnAmount = withdrawalSum(['PAID']);
     const availableBalance = Math.max(0, organizerBalance - pendingWithdrawal - withdrawnAmount);
+    const pengdaWithdrawn = withdrawalSum(['PAID'], 'PENGDA');
+    const developerWithdrawn = withdrawalSum(['PAID'], 'DEVELOPER');
 
     const summary = {
       grossRevenue: decimalToNumber(paidTotals._sum.totalAmount),
@@ -1023,6 +1027,14 @@ router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
       pendingWithdrawal,
       withdrawnAmount,
       availableBalance,
+      // Saldo tersedia realtime per pool (total bagian dikurangi penarikan yang sudah dicairkan).
+      organizerWithdrawn: withdrawnAmount,
+      organizerAvailable: availableBalance,
+      pengdaWithdrawn,
+      developerWithdrawn,
+      // pengdaAvailable / developerAvailable are filled in after per-event split below.
+      pengdaAvailable: 0,
+      developerAvailable: 0,
     };
 
     const paidEventMap = new Map(paidByEvent.map((item) => [item.rekomendasiEventId, item]));
@@ -1053,6 +1065,8 @@ router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
     });
     summary.developerShare = eventSummaries.reduce((sum, event) => sum + event.developerShare, 0);
     summary.pengdaNetShare = eventSummaries.reduce((sum, event) => sum + event.pengdaNetShare, 0);
+    summary.pengdaAvailable = Math.max(0, summary.pengdaNetShare - pengdaWithdrawn);
+    summary.developerAvailable = Math.max(0, summary.developerShare - developerWithdrawn);
 
     res.json({
       summary,
@@ -1471,11 +1485,19 @@ const withdrawalStatusLabel = {
   REJECTED: 'Ditolak',
 };
 
+const withdrawalBeneficiaryLabel = {
+  ORGANIZER: 'Penyelenggara',
+  PENGDA: 'Pengda',
+  DEVELOPER: 'Developer',
+};
+
 const serializeWithdrawal = (item) => ({
   id: item.id,
   userId: item.userId,
   userName: item.user?.name || null,
   userEmail: item.user?.email || null,
+  beneficiaryType: item.beneficiaryType || 'ORGANIZER',
+  beneficiaryLabel: withdrawalBeneficiaryLabel[item.beneficiaryType] || 'Penyelenggara',
   amount: decimalToNumber(item.amount),
   bankName: item.bankName,
   accountNumber: item.accountNumber,
@@ -1500,7 +1522,7 @@ const computeAvailableBalance = async (userId) => {
       _sum: { organizerShareAmount: true },
     }),
     prisma.withdrawalRequest.aggregate({
-      where: { userId, status: { in: ['PENDING', 'APPROVED', 'PAID'] } },
+      where: { userId, beneficiaryType: 'ORGANIZER', status: { in: ['PENDING', 'APPROVED', 'PAID'] } },
       _sum: { amount: true },
     }),
   ]);
@@ -1518,11 +1540,55 @@ const computeRemainingBalance = async (userId) => {
       _sum: { organizerShareAmount: true },
     }),
     prisma.withdrawalRequest.aggregate({
-      where: { userId, status: 'PAID' },
+      where: { userId, beneficiaryType: 'ORGANIZER', status: 'PAID' },
       _sum: { amount: true },
     }),
   ]);
   return Math.max(0, decimalToNumber(paidAgg._sum.organizerShareAmount) - decimalToNumber(withdrawnAgg._sum.amount));
+};
+
+// Global Pengda/Developer pools across every APPROVED event. Pengda gross is the raw
+// pengda share; developer is carved out of it (capped at the pengda share per event);
+// pengdaNet is what's left for Pengda after the developer cut.
+const computeGlobalPools = async () => {
+  const [events, paidByEvent] = await Promise.all([
+    prisma.rekomendasiEvent.findMany({
+      where: { votingConfig: { is: { approvalStatus: 'APPROVED' } } },
+      select: { id: true, votingConfig: { select: { developerSharePercent: true } } },
+    }),
+    prisma.votingPurchase.groupBy({
+      by: ['rekomendasiEventId'],
+      where: { status: 'PAID' },
+      _sum: { totalAmount: true, pengdaShareAmount: true },
+    }),
+  ]);
+  const paidMap = new Map(paidByEvent.map((item) => [item.rekomendasiEventId, item]));
+  let pengdaGross = 0;
+  let developerTotal = 0;
+  for (const event of events) {
+    const paid = paidMap.get(event.id);
+    const grossRevenue = decimalToNumber(paid?._sum.totalAmount);
+    const pengdaShare = decimalToNumber(paid?._sum.pengdaShareAmount);
+    const split = splitPengdaDeveloper(grossRevenue, pengdaShare, decimalToNumber(event.votingConfig?.developerSharePercent));
+    pengdaGross += pengdaShare;
+    developerTotal += split.developerShare;
+  }
+  return { pengdaGross, developerTotal, pengdaNet: Math.max(0, pengdaGross - developerTotal) };
+};
+
+// Available balance for a global pool (PENGDA / DEVELOPER) = pool total minus everything
+// already recorded as paid out for that beneficiary.
+const computePoolBalance = async (beneficiaryType) => {
+  const [pools, paidAgg] = await Promise.all([
+    computeGlobalPools(),
+    prisma.withdrawalRequest.aggregate({
+      where: { beneficiaryType, status: 'PAID' },
+      _sum: { amount: true },
+    }),
+  ]);
+  const total = beneficiaryType === 'DEVELOPER' ? pools.developerTotal : pools.pengdaNet;
+  const withdrawn = decimalToNumber(paidAgg._sum.amount);
+  return { total, withdrawn, availableBalance: Math.max(0, total - withdrawn) };
 };
 
 // List withdrawals (own for penyelenggara, all for admin)
@@ -1532,7 +1598,7 @@ router.get('/admin/withdrawals', authenticate, canManageVoting, async (req, res)
     const where = isAdmin
       ? (req.query.status ? { status: req.query.status } : {})
       : { userId: req.user.id };
-    const [withdrawals, balance] = await Promise.all([
+    const [withdrawals, balance, pengdaPool, developerPool] = await Promise.all([
       prisma.withdrawalRequest.findMany({
         where,
         orderBy: { createdAt: 'desc' },
@@ -1540,10 +1606,14 @@ router.get('/admin/withdrawals', authenticate, canManageVoting, async (req, res)
         include: { user: { select: { name: true, email: true } } },
       }),
       isAdmin ? Promise.resolve(null) : computeAvailableBalance(req.user.id),
+      isAdmin ? computePoolBalance('PENGDA') : Promise.resolve(null),
+      isAdmin ? computePoolBalance('DEVELOPER') : Promise.resolve(null),
     ]);
     res.json({
       withdrawals: withdrawals.map(serializeWithdrawal),
       balance,
+      // Saldo pool global Pengda & Developer (hanya untuk admin/super admin).
+      pools: isAdmin ? { pengda: pengdaPool, developer: developerPool } : null,
     });
   } catch (error) {
     res.status(500).json({ error: 'Gagal memuat data pencairan', detail: error.message });
@@ -1642,6 +1712,56 @@ router.patch('/admin/withdrawals/:id', authenticate, async (req, res) => {
     res.json({ message: 'Status pencairan diperbarui', withdrawal: serializeWithdrawal(updated) });
   } catch (error) {
     res.status(500).json({ error: 'Gagal memperbarui pencairan', detail: error.message });
+  }
+});
+
+// Record a Pengda/Developer pool payout (SUPERADMIN only). Unlike the organizer flow,
+// there is no request step: the super admin has already transferred the money and is
+// only recording it, so the entry is created directly as PAID with the saldo akhir snapshot.
+router.post('/admin/withdrawals/pool', authenticate, async (req, res) => {
+  try {
+    if (req.user?.role !== 'SUPERADMIN') {
+      return res.status(403).json({ error: 'Hanya super admin yang dapat mencatat penarikan Pengda/Developer' });
+    }
+    const beneficiaryType = String(req.body.beneficiaryType || '').toUpperCase();
+    if (!['PENGDA', 'DEVELOPER'].includes(beneficiaryType)) {
+      return res.status(400).json({ error: 'Jenis penerima tidak valid (PENGDA atau DEVELOPER)' });
+    }
+    const amount = Number(req.body.amount);
+    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'Nominal penarikan tidak valid' });
+
+    const bankName = String(req.body.bankName || '').trim();
+    const accountNumber = String(req.body.accountNumber || '').trim();
+    const accountHolder = String(req.body.accountHolder || '').trim();
+    const note = String(req.body.note || '').trim();
+
+    const { availableBalance } = await computePoolBalance(beneficiaryType);
+    if (amount > availableBalance) {
+      return res.status(400).json({ error: `Nominal melebihi saldo ${withdrawalBeneficiaryLabel[beneficiaryType]} tersedia (${availableBalance})` });
+    }
+
+    const created = await prisma.withdrawalRequest.create({
+      data: {
+        userId: req.user.id,
+        beneficiaryType,
+        amount,
+        // Bank fields are optional for a recorded payout; keep a placeholder so the
+        // NOT NULL columns stay satisfied and the record reads sensibly.
+        bankName: bankName || '-',
+        accountNumber: accountNumber || '-',
+        accountHolder: accountHolder || withdrawalBeneficiaryLabel[beneficiaryType],
+        note: note || null,
+        status: 'PAID',
+        adminNote: req.body.adminNote ? String(req.body.adminNote).trim() : null,
+        processedById: req.user.id,
+        processedAt: new Date(),
+        balanceAfter: Math.max(0, availableBalance - amount),
+      },
+      include: { user: { select: { name: true, email: true } } },
+    });
+    res.status(201).json({ message: 'Penarikan dicatat', withdrawal: serializeWithdrawal(created) });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal mencatat penarikan', detail: error.message });
   }
 });
 

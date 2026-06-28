@@ -287,16 +287,25 @@ enum WithdrawalStatus {
   PAID
 }
 
+// Who the withdrawal pays out. ORGANIZER = penyelenggara request flow (PENDING -> PAID).
+// PENGDA / DEVELOPER = global pool payouts recorded directly by super admin (created PAID).
+enum WithdrawalBeneficiary {
+  ORGANIZER
+  PENGDA
+  DEVELOPER
+}
+
 model WithdrawalRequest {
-  id            Int              @id @default(autoincrement())
-  userId        Int              @map("user_id")
-  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  amount        Decimal          @db.Decimal(12, 2)
-  bankName      String           @map("bank_name")
-  accountNumber String           @map("account_number")
-  accountHolder String           @map("account_holder")
-  note          String?          @db.Text
-  status        WithdrawalStatus @default(PENDING)
+  id            Int                   @id @default(autoincrement())
+  userId        Int                   @map("user_id")
+  user          User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  beneficiaryType WithdrawalBeneficiary @default(ORGANIZER) @map("beneficiary_type")
+  amount        Decimal               @db.Decimal(12, 2)
+  bankName      String                @map("bank_name")
+  accountNumber String                @map("account_number")
+  accountHolder String                @map("account_holder")
+  note          String?               @db.Text
+  status        WithdrawalStatus      @default(PENDING)
   adminNote     String?          @map("admin_note") @db.Text
   // Snapshot of the organizer's remaining balance (saldo akhir) at the moment
   // this withdrawal was marked PAID. Null until paid.
@@ -308,6 +317,7 @@ model WithdrawalRequest {
 
   @@index([userId])
   @@index([status])
+  @@index([beneficiaryType])
   @@map("withdrawal_requests")
 }
 
