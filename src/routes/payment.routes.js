@@ -68,12 +68,10 @@ async function handleVotingPayment(midtransOrderId, result, paymentType) {
   if (['CANCELLED', 'EXPIRED'].includes(purchase.status) && result !== 'success') return;
 
   if (result === 'success') {
-    // Applies votes only when voting is still open; otherwise refunds + cancels.
+    // A settled payment is always honored as PAID and its votes counted — even if
+    // it settles a few seconds after close. Never refund/cancel money already taken.
     await finalizeVotingPurchaseSuccess(prisma, purchase.id, {
       paymentType: paymentType || null,
-      refund: (orderId) => refundTransaction(orderId, {
-        reason: 'Voting sudah ditutup sebelum pembayaran selesai',
-      }),
     });
     return;
   }
