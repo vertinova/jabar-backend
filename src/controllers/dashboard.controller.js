@@ -45,8 +45,11 @@ const buildRankingStandings = (results) => {
 };
 
 // ── Smart cache for enriched anggota data ──
-// Cache invalidates when: TTL expires OR total count changes OR force refresh
-const ANGGOTA_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+// Cache invalidates when: TTL expires OR total count changes OR force refresh.
+// Kept short so club baru dari API muncul mendekati realtime di landing. Saat TTL
+// habis dan jumlah club TIDAK berubah, refresh hanya 1x fetch daftar akun (murah);
+// enrichment berat hanya jalan ketika ada penambahan club.
+const ANGGOTA_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 let anggotaCache = { 
   data: null, 
   lastTotal: 0, 
