@@ -212,10 +212,13 @@ const refreshVotingPurchasePaymentStatus = async (purchaseId) => {
   const paymentResult = resolvePaymentStatus(txStatus.transaction_status, txStatus.fraud_status);
 
   if (paymentResult === 'success') {
-    // A settled payment is always honored as PAID and its votes counted — even if
-    // it settles a few seconds after close. Never refund/cancel money already taken.
+    // Counts votes only if it settles while voting is open; if voting already
+    // closed, the transaction fails (refund + cancel).
     await finalizeVotingPurchaseSuccess(prisma, purchase.id, {
       paymentType: txStatus.payment_type || null,
+      refund: (orderId) => refundTransaction(orderId, {
+        reason: 'Voting sudah ditutup sebelum pembayaran selesai',
+      }),
     });
     return prisma.votingPurchase.findUnique({ where: { id: purchase.id } });
   }

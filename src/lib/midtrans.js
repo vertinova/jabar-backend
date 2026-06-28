@@ -41,6 +41,15 @@ const getAuthHeader = () => {
 
 const normalizeMoney = (value) => Math.max(0, Math.round(Number(value) || 0));
 
+// Midtrans expiry.start_time format: "yyyy-MM-dd HH:mm:ss +0000" (formatted in UTC).
+const formatMidtransTime = (date) => {
+  const pad = (n) => String(n).padStart(2, '0');
+  return (
+    `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ` +
+    `${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())} +0000`
+  );
+};
+
 const calculateQrisFee = (originalAmount) => {
   const base = normalizeMoney(originalAmount);
   if (base <= 0) return { grossAmount: 0, fee: 0 };
@@ -92,10 +101,23 @@ const createSnapTransaction = async ({
   // Bind the payment window to the voting close time. A QRIS code that is no
   // longer valid cannot be paid, so a transaction started seconds before close
   // expires (and is rejected by Midtrans) instead of settling after close.
+  //
+  // Midtrans expiry granularity is whole minutes, so a naive `floor/ceil` of the
+  // remaining seconds would let the QRIS outlive the close by up to a minute. To
+  // land the expiry on the exact intended instant we round the duration UP to the
+  // next minute and back-date `start_time` so `start_time + duration` equals
+  // `now + durationSeconds`. start_time is at most ~59s in the past (Midtrans
+  // accepts that) and never in the future for our inputs.
   let expiry;
   const durationSeconds = Math.floor(Number(expiryDurationSeconds) || 0);
   if (durationSeconds > 0) {
-    expiry = { unit: 'minute', duration: Math.max(1, Math.floor(durationSeconds / 60)) };
+    const durationMinutes = Math.max(1, Math.ceil(durationSeconds / 60));
+    const startTime = new Date(Date.now() + durationSeconds * 1000 - durationMinutes * 60 * 1000);
+    expiry = {
+      start_time: formatMidtransTime(startTime),
+      unit: 'minute',
+      duration: durationMinutes,
+    };
   }
 
   const response = await fetch(`${getSnapBaseUrl()}/transactions`, {

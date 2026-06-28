@@ -67,31 +67,51 @@ const applyPaidVotingPurchaseVotes = async (tx, purchaseId, voterIp = '') => {
 
 // Finalize a purchase whose payment Midtrans reports as successful.
 //
-// A payment that Midtrans has already SETTLED is always honored as PAID and its
-// votes are counted — even if the settlement timestamp lands a few seconds after
-// the voting close time. The buyer paid in good faith within the QRIS validity
-// window (that window is bound to the voting close time when the transaction is
-// created), and the money has actually been taken. Refunding/cancelling an
-// already-settled payment is exactly what produced the "paid but cancelled"
-// problem, so we never do that here.
+// Rule: a vote only counts if the payment settles while voting is still open.
+// If voting has already closed by the time the payment settles, the transaction
+// FAILS — the buyer is refunded (best effort) and the purchase is cancelled, so
+// a payment that lands after close never becomes a vote-granting transaction.
+// (The QRIS expiry is also bound to the close time at checkout, so this race is
+// rare; this is the safety net for the few seconds of payment-processing lag.)
 //
-// Stragglers are prevented up front: the QRIS expiry is capped at the close time
-// at checkout, so a buyer cannot start paying long after voting ends.
-//
-// `db` is a PrismaClient (not a transaction — this opens its own transaction).
-// The legacy `refund` option is accepted for backward compatibility but ignored.
-const finalizeVotingPurchaseSuccess = async (db, purchaseId, { paymentType = null } = {}) => {
+// `db` is a PrismaClient (not a transaction — this opens its own transaction
+// for the success path). `refund` is an async fn (orderId) => Promise used to
+// trigger a Midtrans refund when voting has already closed.
+const finalizeVotingPurchaseSuccess = async (db, purchaseId, { paymentType = null, refund } = {}) => {
   const purchase = await db.votingPurchase.findUnique({
     where: { id: purchaseId },
     select: {
       id: true,
       status: true,
       paidAt: true,
+      midtransOrderId: true,
+      event: { select: { votingConfig: { select: { endDate: true } } } },
     },
   });
 
   if (!purchase) return { applied: false, cancelled: false };
   if (purchase.status === 'PAID') return { applied: false, cancelled: false };
+
+  const endDate = purchase.event?.votingConfig?.endDate;
+  const votingClosed = endDate && new Date() > new Date(endDate);
+
+  if (votingClosed) {
+    if (typeof refund === 'function' && purchase.midtransOrderId) {
+      try {
+        await refund(purchase.midtransOrderId);
+      } catch (refundError) {
+        console.error(
+          `[Voting] Gagal refund pembayaran setelah voting ditutup (${purchase.midtransOrderId}):`,
+          refundError.message
+        );
+      }
+    }
+    await db.votingPurchase.update({
+      where: { id: purchase.id },
+      data: { status: 'CANCELLED', paymentType },
+    });
+    return { applied: false, cancelled: true };
+  }
 
   await db.$transaction(async (tx) => {
     await tx.votingPurchase.update({
