@@ -54,12 +54,16 @@ const getAll = async (req, res) => {
   try {
     const { search, status } = req.query;
     const where = {
-      AND: [{
-        OR: [
-          { jenisEvent: null },
-          { jenisEvent: { not: 'E-Voting' } },
-        ],
-      }],
+      AND: [
+        {
+          OR: [
+            { jenisEvent: null },
+            { jenisEvent: { not: 'E-Voting' } },
+          ],
+        },
+        // Event manual (hasil juara pra-digitalisasi) tidak masuk daftar rekomendasi.
+        { isManualRanking: false },
+      ],
     };
     
     // ADMIN sees all, PENGCAB sees events from their pengcab, others see own only

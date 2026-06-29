@@ -98,6 +98,10 @@ model RekomendasiEvent {
   approvedPengdaAt  DateTime?
   nomorSurat        String? // Auto-generated: UM.001/FORBASI-JABAR/II/2026
   suratRekomendasi  String? // Path to generated surat rekomendasi PDF
+  // Event manual yang dibuat Komisi Perlombaan untuk menginput hasil juara event
+  // lama (pra-digitalisasi). Disertakan di klasemen ranking, tapi dikecualikan dari
+  // daftar event publik/agenda & daftar rekomendasi admin.
+  isManualRanking   Boolean        @default(false) @map("is_manual_ranking")
   userId            Int
   pengcabId         Int?
   createdAt         DateTime       @default(now())

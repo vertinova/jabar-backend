@@ -2,6 +2,7 @@ const prisma = require('../lib/prisma');
 const { fetchForbasiAccounts, fetchForbasiAccount, fixForbasiFileUrl } = require('../lib/forbasi');
 
 const nonVotingRecommendationWhere = {
+  isManualRanking: false,
   OR: [
     { jenisEvent: null },
     { jenisEvent: { not: 'E-Voting' } },
@@ -266,7 +267,7 @@ const getLandingData = async (req, res) => {
       prisma.user.count(),
       // All approved rekomendasi events (recent 12)
       prisma.rekomendasiEvent.findMany({
-        where: { status: 'DISETUJUI', suratRekomendasi: { not: null } },
+        where: { status: 'DISETUJUI', suratRekomendasi: { not: null }, isManualRanking: false },
         orderBy: { tanggalMulai: 'desc' },
         take: 12,
         select: {
@@ -373,7 +374,7 @@ const getPublicEvents = async (req, res) => {
   try {
     const [approvedEvents, openKejurda, pengdaEvents] = await Promise.all([
       prisma.rekomendasiEvent.findMany({
-        where: { status: 'DISETUJUI', suratRekomendasi: { not: null } },
+        where: { status: 'DISETUJUI', suratRekomendasi: { not: null }, isManualRanking: false },
         orderBy: { tanggalMulai: 'desc' },
         select: {
           id: true, namaEvent: true, jenisEvent: true,

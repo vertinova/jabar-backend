@@ -174,6 +174,7 @@ router.get('/organizer/events', authenticate, async (req, res) => {
         tanggalMulai: true,
         lokasi: true,
         penyelenggara: true,
+        isManualRanking: true,
         _count: { select: { rankingResults: true } },
       },
     });
@@ -181,6 +182,74 @@ router.get('/organizer/events', authenticate, async (req, res) => {
     res.json(events);
   } catch (error) {
     res.status(500).json({ error: 'Gagal memuat event ranking', detail: error.message });
+  }
+});
+
+// Buat event manual untuk hasil juara event lama (pra-digitalisasi). Hanya ADMIN & KOMPER.
+// Event ini langsung DISETUJUI + ditandai isManualRanking sehingga muncul di dropdown
+// input juara dan klasemen ranking, tapi tidak di daftar event publik/rekomendasi.
+router.post('/organizer/manual-events', authenticate, async (req, res) => {
+  try {
+    if (!['ADMIN', 'KOMPER'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Akses ditolak' });
+    }
+
+    const namaEvent = String(req.body.namaEvent || '').trim();
+    if (!namaEvent) return res.status(400).json({ error: 'Nama event wajib diisi' });
+
+    const tanggalMulai = req.body.tanggalMulai ? new Date(req.body.tanggalMulai) : null;
+    if (tanggalMulai && Number.isNaN(tanggalMulai.getTime())) {
+      return res.status(400).json({ error: 'Tanggal tidak valid' });
+    }
+
+    const event = await prisma.rekomendasiEvent.create({
+      data: {
+        namaEvent,
+        jenisEvent: req.body.jenisEvent?.trim() || 'Manual',
+        tanggalMulai,
+        tanggalSelesai: tanggalMulai,
+        lokasi: req.body.lokasi?.trim() || null,
+        penyelenggara: req.body.penyelenggara?.trim() || null,
+        deskripsi: 'Event manual (hasil juara pra-digitalisasi).',
+        status: 'DISETUJUI',
+        suratRekomendasi: 'MANUAL',
+        isManualRanking: true,
+        approvedPengcabAt: new Date(),
+        approvedPengdaAt: new Date(),
+        userId: req.user.id,
+      },
+      select: { id: true, namaEvent: true, tanggalMulai: true, lokasi: true, penyelenggara: true },
+    });
+
+    res.status(201).json(event);
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal membuat event manual', detail: error.message });
+  }
+});
+
+// Hapus event manual (beserta hasil rankingnya via cascade). Hanya ADMIN & KOMPER,
+// dan hanya untuk event yang memang ditandai manual.
+router.delete('/organizer/manual-events/:id', authenticate, async (req, res) => {
+  try {
+    if (!['ADMIN', 'KOMPER'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Akses ditolak' });
+    }
+    const id = toId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'ID event tidak valid' });
+
+    const event = await prisma.rekomendasiEvent.findUnique({
+      where: { id },
+      select: { id: true, isManualRanking: true },
+    });
+    if (!event) return res.status(404).json({ error: 'Event tidak ditemukan' });
+    if (!event.isManualRanking) {
+      return res.status(403).json({ error: 'Hanya event manual yang bisa dihapus di sini' });
+    }
+
+    await prisma.rekomendasiEvent.delete({ where: { id } });
+    res.json({ message: 'Event manual berhasil dihapus' });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal menghapus event manual', detail: error.message });
   }
 });
 
