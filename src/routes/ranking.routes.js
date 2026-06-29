@@ -33,7 +33,8 @@ const titleFromRank = (rank) => {
 };
 
 const canManageRanking = async (req, eventId) => {
-  if (req.user?.role === 'ADMIN') return true;
+  // ADMIN & KOMPER (Komisi Perlombaan) boleh mengelola hasil ranking semua event.
+  if (req.user?.role === 'ADMIN' || req.user?.role === 'KOMPER') return true;
   if (req.user?.role !== 'PENYELENGGARA') return false;
 
   const event = await prisma.rekomendasiEvent.findUnique({
@@ -152,10 +153,11 @@ router.get('/recent-results', async (req, res) => {
 
 router.get('/organizer/events', authenticate, async (req, res) => {
   try {
-    if (!['ADMIN', 'PENYELENGGARA'].includes(req.user.role)) {
+    if (!['ADMIN', 'KOMPER', 'PENYELENGGARA'].includes(req.user.role)) {
       return res.status(403).json({ error: 'Akses ditolak' });
     }
 
+    // ADMIN & KOMPER melihat semua event terekomendasi; PENYELENGGARA hanya miliknya.
     const where = {
       status: 'DISETUJUI',
       suratRekomendasi: { not: null },
