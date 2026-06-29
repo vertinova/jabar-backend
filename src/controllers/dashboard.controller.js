@@ -27,6 +27,7 @@ const buildRankingStandings = (results) => {
 
     current.totalPoints += result.points;
     current.totalResults += 1;
+    if (!current.logo && result.logo) current.logo = result.logo;
     if (result.rank === 1) current.wins += 1;
     if (result.rank <= 3) current.podiums += 1;
     if (current.highlights.length < 3) {

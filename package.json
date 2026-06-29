@@ -10,6 +10,7 @@
     "db:seed": "node prisma/seed.js",
     "db:seed:superadmin": "node prisma/seed_superadmin.js",
     "db:seed:komper": "node prisma/seed_komper.js",
+    "db:seed:komper-pic": "node prisma/seed_komper_pic.js",
     "reconcile:voting": "node prisma/reconcile_voting_payments.js",
     "db:reset": "npx prisma migrate reset --force",
     "db:studio": "npx prisma studio"

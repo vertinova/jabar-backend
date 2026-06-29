@@ -18,6 +18,10 @@ model User {
   avatar    String?
   pengcabId Int?
   forbasiId Int?     @unique
+  // KOMPER yang menjadi PIC: boleh membuat/kelola akun KOMPER lain.
+  isKomperPic Boolean @default(false) @map("is_komper_pic")
+  // Akun nonaktif tidak bisa login (dinonaktifkan oleh SUPERADMIN/PIC).
+  isActive    Boolean @default(true) @map("is_active")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -152,6 +156,7 @@ model RankingResult {
   participantKey     String           @map("participant_key")
   participantType    String           @default("TEAM") @map("participant_type")
   origin             String?
+  logo               String?
   category           String
   rank               Int
   title              String?

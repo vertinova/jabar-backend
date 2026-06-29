@@ -229,6 +229,11 @@ const login = async (req, res) => {
       return res.status(401).json({ error: 'Username/email atau password salah' });
     }
 
+    // Blokir akun yang dinonaktifkan.
+    if (user.isActive === false) {
+      return res.status(403).json({ error: 'Akun Anda dinonaktifkan. Silakan hubungi admin.' });
+    }
+
     // Fetch pengcab name for response
     let pengcabName = null;
     if (user.pengcabId) {
@@ -244,7 +249,7 @@ const login = async (req, res) => {
 
     res.json({
       message: 'Login berhasil',
-      user: { id: user.id, name: user.name, email: user.email, role: user.role, phone: user.phone, avatar: user.avatar || null, pengcabId: user.pengcabId, pengcab: pengcabName },
+      user: { id: user.id, name: user.name, email: user.email, role: user.role, phone: user.phone, avatar: user.avatar || null, pengcabId: user.pengcabId, pengcab: pengcabName, isKomperPic: user.isKomperPic || false },
       token
     });
   } catch (error) {
@@ -258,7 +263,7 @@ const getProfile = async (req, res) => {
       where: { id: req.user.id },
       select: {
         id: true, name: true, email: true, role: true, phone: true,
-        avatar: true, pengcabId: true, createdAt: true,
+        avatar: true, pengcabId: true, isKomperPic: true, createdAt: true,
         pengcab: { select: { id: true, nama: true, kota: true } }
       }
     });

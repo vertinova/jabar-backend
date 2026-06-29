@@ -1,5 +1,8 @@
+const fs = require('fs');
+const path = require('path');
 const router = require('express').Router();
 const prisma = require('../lib/prisma');
+const upload = require('../middleware/upload.middleware');
 const { authenticate } = require('../middleware/auth.middleware');
 
 const DEFAULT_POINTS = {
@@ -64,6 +67,7 @@ const buildStandings = (results) => {
 
     current.totalPoints += result.points;
     current.totalResults += 1;
+    if (!current.logo && result.logo) current.logo = result.logo;
     if (result.rank === 1) current.wins += 1;
     if (result.rank <= 3) current.podiums += 1;
     if (!current.latestResultAt || result.createdAt > current.latestResultAt) current.latestResultAt = result.createdAt;
@@ -270,6 +274,25 @@ router.get('/organizer/event/:eventId/results', authenticate, async (req, res) =
   }
 });
 
+// Upload logo club. File asli disimpan; saat diakses via /uploads otomatis disajikan
+// sebagai WebP (lihat imageOptimizer middleware). Hanya untuk gambar.
+router.post('/organizer/upload-logo', authenticate, upload.single('logo'), async (req, res) => {
+  try {
+    if (!['ADMIN', 'KOMPER', 'PENYELENGGARA'].includes(req.user.role)) {
+      if (req.file) fs.unlink(req.file.path, () => {});
+      return res.status(403).json({ error: 'Akses ditolak' });
+    }
+    if (!req.file) return res.status(400).json({ error: 'File logo wajib diunggah' });
+    if (!req.file.mimetype.startsWith('image/')) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(400).json({ error: 'File harus berupa gambar (JPG/PNG/WEBP)' });
+    }
+    res.status(201).json({ path: `/uploads/${path.basename(req.file.path)}` });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal mengunggah logo', detail: error.message });
+  }
+});
+
 router.post('/organizer/event/:eventId/results', authenticate, async (req, res) => {
   try {
     const eventId = toId(req.params.eventId);
@@ -305,6 +328,7 @@ router.post('/organizer/event/:eventId/results', authenticate, async (req, res) 
         participantKey: normalizeParticipantKey(participantName),
         participantType,
         origin: origin || null,
+        logo: req.body.logo?.trim() || null,
         category,
         rank,
         title: req.body.title?.trim() || titleFromRank(rank),
@@ -347,6 +371,7 @@ router.put('/organizer/results/:id', authenticate, async (req, res) => {
           participantType: ['TEAM', 'INDIVIDUAL'].includes(req.body.participantType) ? req.body.participantType : 'TEAM',
         }),
         ...(req.body.origin !== undefined && { origin: String(req.body.origin || '').trim() || null }),
+        ...(req.body.logo !== undefined && { logo: String(req.body.logo || '').trim() || null }),
         ...(req.body.category !== undefined && { category: String(req.body.category || '').trim() }),
         ...(rank !== undefined && Number.isInteger(rank) && { rank, title: req.body.title?.trim() || titleFromRank(rank) }),
         ...(points !== undefined && Number.isInteger(points) && { points }),
