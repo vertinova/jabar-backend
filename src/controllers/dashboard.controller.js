@@ -341,13 +341,23 @@ const getLandingData = async (req, res) => {
         event: { select: { id: true, namaEvent: true, tanggalMulai: true } },
       },
     });
-    // Klasemen dipisah per mata lomba (default LOBB).
+    // Klasemen dipisah per mata lomba (default LOBB) — dan per kategori di dalamnya.
+    // Frontend: LOBB ditampilkan per kategori, RUKIBRA digabung.
     const MATA_LOMBA = ['LOBB', 'RUKIBRA'];
     const rankingByMataLomba = {};
+    const rankingByCategory = {};
     for (const ml of MATA_LOMBA) {
-      rankingByMataLomba[ml] = buildRankingStandings(
-        rankingResults.filter((r) => (r.mataLomba || 'LOBB') === ml)
-      ).slice(0, 10);
+      const mlResults = rankingResults.filter((r) => (r.mataLomba || 'LOBB') === ml);
+      rankingByMataLomba[ml] = buildRankingStandings(mlResults).slice(0, 10);
+      const byCat = {};
+      for (const r of mlResults) {
+        const c = r.category || '-';
+        (byCat[c] = byCat[c] || []).push(r);
+      }
+      rankingByCategory[ml] = {};
+      for (const c of Object.keys(byCat)) {
+        rankingByCategory[ml][c] = buildRankingStandings(byCat[c]).slice(0, 10);
+      }
     }
     const rankingStandings = rankingByMataLomba.LOBB;
 
@@ -371,6 +381,7 @@ const getLandingData = async (req, res) => {
       strukturList,
       rankingStandings,
       rankingByMataLomba,
+      rankingByCategory,
     });
   } catch (error) {
     console.error('Landing data error:', error);
