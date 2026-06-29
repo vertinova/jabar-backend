@@ -341,7 +341,15 @@ const getLandingData = async (req, res) => {
         event: { select: { id: true, namaEvent: true, tanggalMulai: true } },
       },
     });
-    const rankingStandings = buildRankingStandings(rankingResults).slice(0, 10);
+    // Klasemen dipisah per mata lomba (default LOBB).
+    const MATA_LOMBA = ['LOBB', 'RUKIBRA'];
+    const rankingByMataLomba = {};
+    for (const ml of MATA_LOMBA) {
+      rankingByMataLomba[ml] = buildRankingStandings(
+        rankingResults.filter((r) => (r.mataLomba || 'LOBB') === ml)
+      ).slice(0, 10);
+    }
+    const rankingStandings = rankingByMataLomba.LOBB;
 
     res.json({
       stats: {
@@ -362,6 +370,7 @@ const getLandingData = async (req, res) => {
       config,
       strukturList,
       rankingStandings,
+      rankingByMataLomba,
     });
   } catch (error) {
     console.error('Landing data error:', error);

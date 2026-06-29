@@ -157,6 +157,7 @@ model RankingResult {
   participantType    String           @default("TEAM") @map("participant_type")
   origin             String?
   logo               String?
+  mataLomba          String           @default("LOBB") @map("mata_lomba")
   category           String
   rank               Int
   title              String?

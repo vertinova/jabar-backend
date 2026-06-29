@@ -14,6 +14,13 @@ const DEFAULT_POINTS = {
   6: 10,
 };
 
+// Mata lomba (default LOBB). Klasemen ranking dipisah per mata lomba.
+const MATA_LOMBA = ['LOBB', 'RUKIBRA'];
+const normalizeMataLomba = (value) => {
+  const v = String(value || '').trim().toUpperCase();
+  return MATA_LOMBA.includes(v) ? v : 'LOBB';
+};
+
 const normalizeParticipantKey = (value) =>
   String(value || '')
     .trim()
@@ -104,6 +111,7 @@ router.get('/standings', async (req, res) => {
     const where = {
       event: { status: 'DISETUJUI', suratRekomendasi: { not: null } },
     };
+    if (req.query.mataLomba) where.mataLomba = normalizeMataLomba(req.query.mataLomba);
 
     if (Number.isFinite(year)) {
       where.event.tanggalMulai = {
@@ -329,6 +337,7 @@ router.post('/organizer/event/:eventId/results', authenticate, async (req, res) 
         participantType,
         origin: origin || null,
         logo: req.body.logo?.trim() || null,
+        mataLomba: normalizeMataLomba(req.body.mataLomba),
         category,
         rank,
         title: req.body.title?.trim() || titleFromRank(rank),
@@ -372,6 +381,7 @@ router.put('/organizer/results/:id', authenticate, async (req, res) => {
         }),
         ...(req.body.origin !== undefined && { origin: String(req.body.origin || '').trim() || null }),
         ...(req.body.logo !== undefined && { logo: String(req.body.logo || '').trim() || null }),
+        ...(req.body.mataLomba !== undefined && { mataLomba: normalizeMataLomba(req.body.mataLomba) }),
         ...(req.body.category !== undefined && { category: String(req.body.category || '').trim() }),
         ...(rank !== undefined && Number.isInteger(rank) && { rank, title: req.body.title?.trim() || titleFromRank(rank) }),
         ...(points !== undefined && Number.isInteger(points) && { points }),
