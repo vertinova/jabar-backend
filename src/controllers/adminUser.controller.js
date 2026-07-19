@@ -1,6 +1,6 @@
 const bcrypt = require('bcryptjs');
 const prisma = require('../lib/prisma');
-const { fetchForbasiAccounts, fetchForbasiAccount, changeForbasiPassword, FORBASI_API_URL, FORBASI_API_KEY } = require('../lib/forbasi');
+const { fetchForbasiAccounts, fetchForbasiAccount, changeForbasiPassword, isForbasiConfigured, FORBASI_API_URL, FORBASI_API_KEY } = require('../lib/forbasi');
 
 // ── Cache for anggota KTA data ──
 let anggotaKtaCache = { 
@@ -153,6 +153,9 @@ const resetForbasiPassword = async (req, res) => {
     }
     if (newPassword.length < 6) {
       return res.status(400).json({ error: 'Password baru minimal 6 karakter' });
+    }
+    if (!isForbasiConfigured()) {
+      return res.status(503).json({ error: 'Integrasi FORBASI tidak aktif' });
     }
 
     // Use FORBASI API reset_password action (admin level API key)

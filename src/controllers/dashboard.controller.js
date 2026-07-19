@@ -1,5 +1,5 @@
 const prisma = require('../lib/prisma');
-const { fetchForbasiAccounts, fetchForbasiAccount, fixForbasiFileUrl } = require('../lib/forbasi');
+const { fetchForbasiAccounts, fetchForbasiAccount, fixForbasiFileUrl, isForbasiConfigured } = require('../lib/forbasi');
 
 const nonVotingRecommendationWhere = {
   isManualRanking: false,
@@ -90,6 +90,9 @@ const getForbasiLogoUrl = (account = {}, kta = {}) => fixForbasiFileUrl(firstVal
 // Helper: ensure anggota cache is populated
 // Auto-refresh when: TTL expired, new member detected, or force refresh
 const ensureAnggotaCache = async (forceRefresh = false) => {
+  // Integrasi FORBASI mati (dev lokal) — jangan fetch, cukup balikin list kosong
+  if (!isForbasiConfigured()) return anggotaCache.data || [];
+
   try {
     const now = Date.now();
     const cacheExpired = !anggotaCache.lastFetch || (now - anggotaCache.lastFetch) > anggotaCache.CACHE_TTL;

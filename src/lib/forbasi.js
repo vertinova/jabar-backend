@@ -7,9 +7,20 @@ const FORBASI_API_URL = process.env.FORBASI_API_URL || 'https://forbasi.or.id/ap
 const FORBASI_API_KEY = process.env.FORBASI_API_KEY || '';
 
 /**
+ * Integrasi FORBASI aktif hanya jika API key terisi.
+ * Di dev lokal key sengaja dikosongkan (lihat .env), jadi semua call
+ * di-skip supaya tidak spam 401 Unauthorized ke server produksi.
+ */
+function isForbasiConfigured() {
+  return Boolean(FORBASI_API_KEY);
+}
+
+/**
  * Fetch all pengcab Jawa Barat from FORBASI API
  */
 async function fetchPengcabFromForbasi() {
+  if (!isForbasiConfigured()) return { total: 0, data: [] };
+
   const url = `${FORBASI_API_URL}/accounts?role=pengcab&per_page=100`;
 
   const response = await fetch(url, {
@@ -34,6 +45,8 @@ async function fetchPengcabFromForbasi() {
  * Fetch detail of a specific pengcab account by username (v3.0)
  */
 async function fetchPengcabDetail(username) {
+  if (!isForbasiConfigured()) return null;
+
   const url = `${FORBASI_API_URL}/account?username=${encodeURIComponent(username)}`;
 
   const response = await fetch(url, {
@@ -56,6 +69,12 @@ async function fetchPengcabDetail(username) {
  * Returns user data if login is successful, throws error with message if failed
  */
 async function verifyForbasiLogin(username, password) {
+  // Integrasi mati — biarkan caller pakai pesan default ("password salah"),
+  // jangan bocorkan detail konfigurasi ke response login.
+  if (!isForbasiConfigured()) {
+    return { success: false, error: null };
+  }
+
   const url = `${FORBASI_API_URL}/login`;
 
   const response = await fetch(url, {
@@ -83,6 +102,8 @@ async function verifyForbasiLogin(username, password) {
  * @param {Object} options - { role, search, page, per_page }
  */
 async function fetchForbasiAccounts(options = {}) {
+  if (!isForbasiConfigured()) return [];
+
   const allAccounts = [];
   let page = 1;
   let hasMore = true;
@@ -128,6 +149,8 @@ async function fetchForbasiAccounts(options = {}) {
  * Fetch single account detail from FORBASI API (v3.0)
  */
 async function fetchForbasiAccount(identifier) {
+  if (!isForbasiConfigured()) return null;
+
   const param = typeof identifier === 'number' ? `id=${identifier}` : `username=${encodeURIComponent(identifier)}`;
   const url = `${FORBASI_API_URL}/account?${param}`;
 
@@ -145,6 +168,10 @@ async function fetchForbasiAccount(identifier) {
  * @param {Object} fields - { club_name, email, phone, address, school_name }
  */
 async function updateForbasiProfile(id, fields) {
+  if (!isForbasiConfigured()) {
+    return { success: false, error: 'Integrasi FORBASI tidak aktif' };
+  }
+
   const url = `${FORBASI_API_URL}/update-profile`;
   const response = await fetch(url, {
     method: 'POST',
@@ -159,6 +186,10 @@ async function updateForbasiProfile(id, fields) {
  * Change password via FORBASI API (v3.0)
  */
 async function changeForbasiPassword(id, oldPassword, newPassword) {
+  if (!isForbasiConfigured()) {
+    return { success: false, error: 'Integrasi FORBASI tidak aktif' };
+  }
+
   const url = `${FORBASI_API_URL}/change-password`;
   const response = await fetch(url, {
     method: 'POST',
@@ -222,6 +253,8 @@ function fixForbasiFileUrl(url) {
  * @param {number|string} identifier - user_id or username
  */
 async function fetchForbasiKta(identifier) {
+  if (!isForbasiConfigured()) return { total_kta: 0, kta: [] };
+
   const param = typeof identifier === 'number' ? `user_id=${identifier}` : `username=${encodeURIComponent(identifier)}`;
   const url = `${FORBASI_API_URL}/kta?${param}`;
 
@@ -242,6 +275,7 @@ async function fetchForbasiKta(identifier) {
 }
 
 module.exports = {
+  isForbasiConfigured,
   fetchPengcabFromForbasi,
   fetchPengcabDetail,
   verifyForbasiLogin,
