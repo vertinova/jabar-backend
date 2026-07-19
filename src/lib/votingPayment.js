@@ -1,3 +1,5 @@
+const { invalidateEventVotersSafe } = require('./votersFeed');
+
 const VOTING_ADMIN_FEE_PER_VOTE = 500;
 const VOTING_MAX_ADMIN_FEE = 10000;
 
@@ -85,6 +87,7 @@ const finalizeVotingPurchaseSuccess = async (db, purchaseId, { paymentType = nul
       status: true,
       paidAt: true,
       midtransOrderId: true,
+      rekomendasiEventId: true,
       event: { select: { votingConfig: { select: { endDate: true } } } },
     },
   });
@@ -124,6 +127,12 @@ const finalizeVotingPurchaseSuccess = async (db, purchaseId, { paymentType = nul
     });
     await applyPaidVotingPurchaseVotes(tx, purchase.id);
   });
+
+  // Vote sudah ter-commit — segarkan ticker voter agar pesan pendukung ini
+  // langsung tampil. Sengaja di luar transaksi dan tidak pernah melempar error,
+  // supaya pembayaran yang sudah berhasil tidak bisa digagalkan oleh cache.
+  invalidateEventVotersSafe(purchase.rekomendasiEventId);
+
   return { applied: true, cancelled: false };
 };
 

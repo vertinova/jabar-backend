@@ -5,6 +5,7 @@ const router = require('express').Router();
 const prisma = require('../lib/prisma');
 const upload = require('../middleware/upload.middleware');
 const { authenticate } = require('../middleware/auth.middleware');
+const { getEventVoters, invalidateEventVotersSafe, VOTERS_LIMIT } = require('../lib/votersFeed');
 const {
   calculateQrisFee,
   createSnapTransaction,
@@ -321,131 +322,54 @@ router.get('/events/:eventId', async (req, res) => {
   }
 });
 
-// Public: the top 3 voters who cast the most votes in an event.
-// Count actual vote rows so the leaderboard always matches the applied nominee
-// totals. Paid voting is grouped per buyer phone; free voting per voter name.
-// Returns { topVoters: [{ name, voteCount, details }] } ordered desc (also keeps
-// `topVoter` = first entry for backward compatibility).
+// Cari event voting publik yang aktif; dipakai endpoint voter feed di bawah.
+const findPublicVotingEvent = (eventId) =>
+  prisma.rekomendasiEvent.findFirst({
+    where: {
+      id: eventId,
+      NOT: { status: 'DITOLAK' },
+      votingConfig: { is: { enabled: true, approvalStatus: 'APPROVED' } },
+    },
+    include: { votingConfig: { select: { isPaid: true } } },
+  });
+
+// Public: semua voter sebuah event beserta pesan dukungannya, urut dari yang
+// paling baru. Dipakai ticker berjalan & popup daftar voter di halaman voting.
+// Hasilnya di-cache pendek di votersFeed agar tidak membebani DB yang sedang
+// melayani vote yang berlangsung.
+router.get('/events/:eventId/voters', async (req, res) => {
+  try {
+    const eventId = toId(req.params.eventId);
+    if (!eventId) return res.status(400).json({ error: 'ID event tidak valid' });
+
+    const event = await findPublicVotingEvent(eventId);
+    if (!event) return res.status(404).json({ error: 'Event voting tidak ditemukan' });
+
+    const { voters, total } = await getEventVoters(eventId, Boolean(event.votingConfig?.isPaid));
+    res.json({ voters: voters.slice(0, VOTERS_LIMIT), total, limit: VOTERS_LIMIT });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal memuat daftar voter', detail: error.message });
+  }
+});
+
+// Public: 3 voter dengan vote terbanyak.
+// Dipertahankan untuk bundle frontend lama yang sudah ter-deploy; sekarang
+// dilayani dari agregasi yang sama dengan /voters.
 router.get('/events/:eventId/top-voter', async (req, res) => {
   try {
     const eventId = toId(req.params.eventId);
     if (!eventId) return res.status(400).json({ error: 'ID event tidak valid' });
 
-    const event = await prisma.rekomendasiEvent.findFirst({
-      where: {
-        id: eventId,
-        NOT: { status: 'DITOLAK' },
-        votingConfig: { is: { enabled: true, approvalStatus: 'APPROVED' } },
-      },
-      include: { votingConfig: { select: { isPaid: true } } },
-    });
+    const event = await findPublicVotingEvent(eventId);
     if (!event) return res.status(404).json({ error: 'Event voting tidak ditemukan' });
 
-    const respond = (topVoters) => res.json({ topVoters, topVoter: topVoters[0] || null });
+    const { voters } = await getEventVoters(eventId, Boolean(event.votingConfig?.isPaid));
+    const topVoters = [...voters]
+      .sort((a, b) => b.voteCount - a.voteCount)
+      .slice(0, 3)
+      .map(({ name, message, voteCount, details }) => ({ name, message, voteCount, details }));
 
-    if (event.votingConfig?.isPaid) {
-      const votes = await prisma.votingVote.findMany({
-        where: {
-          category: { config: { rekomendasiEventId: eventId } },
-          purchase: { status: 'PAID', buyerPhone: { not: null } },
-        },
-        select: {
-          category: { select: { title: true } },
-          nominee: { select: { nomineeName: true } },
-          purchase: {
-            select: {
-              buyerPhone: true,
-              buyerName: true,
-              supportMessage: true,
-              createdAt: true,
-            },
-          },
-        },
-      });
-
-      const voterMap = new Map();
-      for (const vote of votes) {
-        const purchase = vote.purchase;
-        if (!purchase?.buyerPhone) continue;
-        const current = voterMap.get(purchase.buyerPhone) || {
-          name: purchase.buyerName || 'Anonim',
-          message: '',
-          voteCount: 0,
-          latestPurchaseAt: null,
-          details: new Map(),
-        };
-        current.voteCount += 1;
-        const detailKey = `${vote.category?.title || 'Tanpa kategori'}|${vote.nominee?.nomineeName || 'Tanpa nominee'}`;
-        const detail = current.details.get(detailKey) || {
-          category: vote.category?.title || 'Tanpa kategori',
-          nominee: vote.nominee?.nomineeName || 'Tanpa nominee',
-          voteCount: 0,
-        };
-        detail.voteCount += 1;
-        current.details.set(detailKey, detail);
-        if (!current.latestPurchaseAt || purchase.createdAt > current.latestPurchaseAt) {
-          current.name = purchase.buyerName || current.name;
-          if (purchase.supportMessage?.trim()) current.message = purchase.supportMessage.trim();
-          current.latestPurchaseAt = purchase.createdAt;
-        }
-        voterMap.set(purchase.buyerPhone, current);
-      }
-
-      const topVoters = Array.from(voterMap.values())
-        .sort((a, b) => b.voteCount - a.voteCount)
-        .slice(0, 3)
-        .map(({ name, message, voteCount, details }) => ({
-          name,
-          message,
-          voteCount,
-          details: Array.from(details.values()).sort((a, b) => b.voteCount - a.voteCount),
-        }));
-      return respond(topVoters);
-    }
-
-    // Free voting: count vote rows grouped by voter name across the event's categories.
-    const categories = await prisma.votingCategory.findMany({
-      where: { config: { rekomendasiEventId: eventId } },
-      select: { id: true },
-    });
-    const categoryIds = categories.map((category) => category.id);
-    if (categoryIds.length === 0) return respond([]);
-
-    const grouped = await prisma.votingVote.groupBy({
-      by: ['voterName'],
-      where: { categoryId: { in: categoryIds }, voterName: { not: null } },
-      _count: { _all: true },
-      orderBy: { _count: { voterName: 'desc' } },
-      take: 3,
-    });
-    const topVoters = [];
-    for (const group of grouped.filter((item) => item._count._all)) {
-      const detailVotes = await prisma.votingVote.findMany({
-        where: { categoryId: { in: categoryIds }, voterName: group.voterName },
-        select: {
-          category: { select: { title: true } },
-          nominee: { select: { nomineeName: true } },
-        },
-      });
-      const details = new Map();
-      for (const vote of detailVotes) {
-        const detailKey = `${vote.category?.title || 'Tanpa kategori'}|${vote.nominee?.nomineeName || 'Tanpa nominee'}`;
-        const detail = details.get(detailKey) || {
-          category: vote.category?.title || 'Tanpa kategori',
-          nominee: vote.nominee?.nomineeName || 'Tanpa nominee',
-          voteCount: 0,
-        };
-        detail.voteCount += 1;
-        details.set(detailKey, detail);
-      }
-      topVoters.push({
-        name: group.voterName || 'Anonim',
-        message: '',
-        voteCount: group._count._all,
-        details: Array.from(details.values()).sort((a, b) => b.voteCount - a.voteCount),
-      });
-    }
-    return respond(topVoters);
+    res.json({ topVoters, topVoter: topVoters[0] || null });
   } catch (error) {
     res.status(500).json({ error: 'Gagal memuat voter terbanyak', detail: error.message });
   }
@@ -506,6 +430,10 @@ router.post('/vote', optionalAuthenticate, async (req, res) => {
       });
       return created;
     });
+
+    // Ticker voter harus langsung menampilkan vote ini. Aman dipanggil di sini:
+    // vote sudah ter-commit, dan invalidasi cache tidak pernah melempar error.
+    invalidateEventVotersSafe(category.config.rekomendasiEventId);
 
     res.status(201).json({ message: 'Vote berhasil', vote });
   } catch (error) {
