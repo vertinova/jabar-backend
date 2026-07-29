@@ -201,6 +201,24 @@ async function changeForbasiPassword(id, oldPassword, newPassword) {
 }
 
 /**
+ * Reset password via FORBASI API (admin level, tanpa password lama)
+ */
+async function resetForbasiPassword(id, newPassword) {
+  if (!isForbasiConfigured()) {
+    return { success: false, error: 'Integrasi FORBASI tidak aktif' };
+  }
+
+  const url = `${FORBASI_API_URL}?action=reset_password`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-API-Key': FORBASI_API_KEY },
+    body: JSON.stringify({ id, new_password: newPassword })
+  });
+  const result = await response.json().catch(() => null);
+  return result || { success: false, error: 'Respons FORBASI tidak valid' };
+}
+
+/**
  * Map FORBASI API data to our Pengcab model format
  */
 function mapForbasiToPengcab(apiData) {
@@ -285,6 +303,7 @@ module.exports = {
   fixForbasiFileUrl,
   updateForbasiProfile,
   changeForbasiPassword,
+  resetForbasiPassword,
   mapForbasiToPengcab,
   FORBASI_API_URL,
   FORBASI_API_KEY

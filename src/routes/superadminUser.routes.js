@@ -19,7 +19,17 @@ const requireManager = async (req, res, next) => {
   }
 };
 
+// Panel "Semua Pengguna" jauh lebih sensitif (lihat semua akun + reset password),
+// jadi hanya SUPERADMIN/ADMIN — PIC KOMPER tidak boleh masuk ke sini.
+const requireAdminLevel = (req, res, next) => {
+  if (['SUPERADMIN', 'ADMIN'].includes(req.user.role)) return next();
+  return res.status(403).json({ error: 'Akses ditolak' });
+};
+
 router.use(authenticate, requireManager);
+
+router.get('/all', requireAdminLevel, ctrl.listAllUsers);
+router.post('/all/:id/reset-password', requireAdminLevel, ctrl.resetUserPassword);
 
 router.get('/roles', ctrl.getRoles);
 router.get('/', ctrl.listUsers);

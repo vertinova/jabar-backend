@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const prisma = require('../lib/prisma');
+const { isForbasiConfigured, resetForbasiPassword } = require('../lib/forbasi');
 
 // Role yang boleh dikelola lewat panel ini. SUPERADMIN TIDAK boleh membuat/menyentuh
 // akun ADMIN/SUPERADMIN/PENGCAB dll — hanya role non-privileged di daftar ini.
@@ -142,4 +143,132 @@ const deleteUser = async (req, res) => {
   }
 };
 
-module.exports = { getRoles, listUsers, createUser, updateUser, deleteUser };
+// ==================== SEMUA PENGGUNA (SUPERADMIN/ADMIN) ====================
+// Panel read-only untuk melihat seluruh akun di aplikasi + reset password.
+// Berbeda dengan endpoint di atas yang hanya mengelola role di MANAGEABLE_ROLES.
+
+const ALL_ROLES = ['ADMIN', 'PENGCAB', 'USER', 'PENYELENGGARA', 'UMUM', 'SUPERADMIN', 'KOMPER'];
+
+const allUsersSelect = {
+  id: true,
+  name: true,
+  email: true,
+  role: true,
+  phone: true,
+  avatar: true,
+  pengcabId: true,
+  forbasiId: true,
+  isKomperPic: true,
+  isActive: true,
+  createdAt: true,
+  updatedAt: true,
+  pengcab: { select: { id: true, nama: true, kota: true } },
+};
+
+// GET /api/superadmin-users/all — daftar SEMUA pengguna (search + filter + paginasi).
+const listAllUsers = async (req, res) => {
+  try {
+    const search = String(req.query.search || '').trim();
+    const role = String(req.query.role || '').trim();
+    const pengcabId = String(req.query.pengcabId || '').trim();
+    const status = String(req.query.status || '').trim(); // '', 'AKTIF', 'NONAKTIF'
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const perPage = Math.min(100, Math.max(1, Number.parseInt(req.query.perPage, 10) || 20));
+
+    const where = {};
+    if (role && ALL_ROLES.includes(role)) where.role = role;
+    if (pengcabId) {
+      const pid = Number.parseInt(pengcabId, 10);
+      if (Number.isInteger(pid)) where.pengcabId = pid;
+    }
+    if (status === 'AKTIF') where.isActive = true;
+    if (status === 'NONAKTIF') where.isActive = false;
+    if (search) {
+      where.OR = [
+        { name: { contains: search } },
+        { email: { contains: search } },
+        { phone: { contains: search } },
+      ];
+    }
+
+    const [total, data, byRole] = await Promise.all([
+      prisma.user.count({ where }),
+      prisma.user.findMany({
+        where,
+        select: allUsersSelect,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * perPage,
+        take: perPage,
+      }),
+      prisma.user.groupBy({ by: ['role'], _count: true }),
+    ]);
+
+    res.json({
+      data,
+      total,
+      page,
+      perPage,
+      totalPages: Math.max(1, Math.ceil(total / perPage)),
+      roleCounts: Object.fromEntries(byRole.map((r) => [r.role, r._count])),
+      totalAll: byRole.reduce((sum, r) => sum + r._count, 0),
+      forbasiEnabled: isForbasiConfigured(),
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal memuat daftar pengguna', detail: error.message });
+  }
+};
+
+// POST /api/superadmin-users/all/:id/reset-password — reset password akun mana pun.
+const resetUserPassword = async (req, res) => {
+  try {
+    const id = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID tidak valid' });
+
+    const newPassword = String(req.body.newPassword || '');
+    if (newPassword.length < 6) return res.status(400).json({ error: 'Password baru minimal 6 karakter' });
+
+    const target = await prisma.user.findUnique({
+      where: { id },
+      select: { id: true, name: true, email: true, role: true, forbasiId: true },
+    });
+    if (!target) return res.status(404).json({ error: 'Pengguna tidak ditemukan' });
+
+    // Hanya SUPERADMIN yang boleh mereset password akun privileged.
+    if (['SUPERADMIN', 'ADMIN'].includes(target.role) && req.user.role !== 'SUPERADMIN') {
+      return res.status(403).json({ error: 'Hanya Super Admin yang dapat mereset password akun ini' });
+    }
+
+    // Akun yang tertaut FORBASI Pusat bisa login lewat fallback API Pusat, jadi
+    // reset lokal saja tidak efektif kecuali ikut direset di Pusat.
+    const wantSync = req.body.syncForbasi === true || req.body.syncForbasi === 'true';
+    let forbasiSynced = false;
+    let forbasiError = null;
+
+    if (wantSync && target.forbasiId) {
+      if (!isForbasiConfigured()) {
+        forbasiError = 'Integrasi FORBASI tidak aktif';
+      } else {
+        const result = await resetForbasiPassword(target.forbasiId, newPassword);
+        if (result?.success) forbasiSynced = true;
+        else forbasiError = result?.error || 'Gagal reset password di FORBASI Pusat';
+      }
+    }
+
+    await prisma.user.update({
+      where: { id },
+      data: { password: await bcrypt.hash(newPassword, 10) },
+    });
+
+    res.json({
+      message: 'Password berhasil direset',
+      user: { id: target.id, name: target.name, email: target.email, role: target.role },
+      forbasiLinked: !!target.forbasiId,
+      forbasiSynced,
+      forbasiError,
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal mereset password', detail: error.message });
+  }
+};
+
+module.exports = { getRoles, listUsers, createUser, updateUser, deleteUser, listAllUsers, resetUserPassword };
