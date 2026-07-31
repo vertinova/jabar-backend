@@ -20,7 +20,10 @@ const {
   calculateVotingAdminFee,
   calculateVotingRevenueSplit,
   finalizeVotingPurchaseSuccess,
+  VOTING_ADMIN_FEE_PER_VOTE,
+  VOTING_MAX_ADMIN_FEE,
 } = require('../lib/votingPayment');
+const { ADMIN_FEE_ROLES, isAdminLikeRole, isSuperRole } = require('../lib/roles');
 
 const optionalAuthenticate = (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -28,12 +31,12 @@ const optionalAuthenticate = (req, res, next) => {
   return authenticate(req, res, next);
 };
 
-// SUPERADMIN manages every organizer's vote just like ADMIN does (but only here,
-// in the voting module — it has no access to the rest of the admin panel).
-const isAdminRole = (role) => role === 'ADMIN' || role === 'SUPERADMIN';
+// SUPERADMIN/DEVELOPER manage every organizer's vote just like ADMIN does (but only
+// here, in the voting module — they have no access to the rest of the admin panel).
+const isAdminRole = (role) => isAdminLikeRole(role);
 
 const canManageVoting = (req, res, next) => {
-  if (['ADMIN', 'SUPERADMIN', 'PENYELENGGARA'].includes(req.user?.role)) return next();
+  if (isAdminLikeRole(req.user?.role) || req.user?.role === 'PENYELENGGARA') return next();
   return res.status(403).json({ error: 'Akses ditolak' });
 };
 
@@ -1198,7 +1201,7 @@ router.put('/admin/event/:eventId/config', authenticate, canManageVoting, async 
 
 router.patch('/admin/event/:eventId/developer-share', authenticate, canManageVoting, async (req, res) => {
   try {
-    if (req.user?.role !== 'SUPERADMIN') {
+    if (!isSuperRole(req.user?.role)) {
       return res.status(403).json({ error: 'Hanya super admin yang dapat mengatur persentase developer' });
     }
 
@@ -1644,12 +1647,12 @@ router.patch('/admin/withdrawals/:id', authenticate, async (req, res) => {
   }
 });
 
-// Record a Pengda/Developer pool payout (SUPERADMIN only). Unlike the organizer flow,
-// there is no request step: the super admin has already transferred the money and is
+// Record a Pengda/Developer pool payout (SUPERADMIN/DEVELOPER only). Unlike the organizer
+// flow, there is no request step: the super admin has already transferred the money and is
 // only recording it, so the entry is created directly as PAID with the saldo akhir snapshot.
 router.post('/admin/withdrawals/pool', authenticate, async (req, res) => {
   try {
-    if (req.user?.role !== 'SUPERADMIN') {
+    if (!isSuperRole(req.user?.role)) {
       return res.status(403).json({ error: 'Hanya super admin yang dapat mencatat penarikan Pengda/Developer' });
     }
     const beneficiaryType = String(req.body.beneficiaryType || '').toUpperCase();

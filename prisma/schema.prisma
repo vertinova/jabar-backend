@@ -12,6 +12,9 @@ model User {
   id        Int      @id @default(autoincrement())
   name      String
   email     String   @unique
+  // Username login untuk akun lokal (mis. DEVELOPER) yang tidak di-SSO ke
+  // FORBASI Pusat, sehingga bisa masuk tanpa mengetik alamat email.
+  username  String?  @unique
   password  String
   role      Role     @default(USER)
   phone     String?
@@ -45,6 +48,9 @@ enum Role {
   // Komisi Perlombaan: hanya menginput hasil juara (ranking prestasi) dari event
   // yang sudah direkomendasikan/disetujui. Akun lokal, tidak di-SSO ke Pusat.
   KOMPER
+  // Developer/pengelola teknis: hak akses identik SUPERADMIN (modul e-voting,
+  // monitoring, kelola akun) plus panel rekap biaya admin transaksi vote.
+  DEVELOPER
 }
 
 // ==================== PENGCAB ====================

@@ -3,6 +3,7 @@ const router = require('express').Router();
 const prisma = require('../lib/prisma');
 const presence = require('../lib/presence');
 const { authenticate } = require('../middleware/auth.middleware');
+const { isAdminLikeRole } = require('../lib/roles');
 
 const optionalAuthenticate = (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -11,7 +12,7 @@ const optionalAuthenticate = (req, res, next) => {
 };
 
 const isAdminLike = (req, res, next) => {
-  if (['ADMIN', 'SUPERADMIN'].includes(req.user?.role)) return next();
+  if (isAdminLikeRole(req.user?.role)) return next();
   return res.status(403).json({ error: 'Akses ditolak' });
 };
 

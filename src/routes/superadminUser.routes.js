@@ -2,13 +2,14 @@ const router = require('express').Router();
 const prisma = require('../lib/prisma');
 const { authenticate } = require('../middleware/auth.middleware');
 const ctrl = require('../controllers/superadminUser.controller');
+const { isSuperRole } = require('../lib/roles');
 
 // Manajemen akun untuk SUPERADMIN/ADMIN, dan KOMPER yang menjadi PIC. Dibatasi
 // mengelola role non-privileged saja (lihat MANAGEABLE_ROLES di controller).
 const requireManager = async (req, res, next) => {
   try {
     const role = req.user.role;
-    if (role === 'SUPERADMIN' || role === 'ADMIN') return next();
+    if (isSuperRole(role) || role === 'ADMIN') return next();
     if (role === 'KOMPER') {
       const u = await prisma.user.findUnique({ where: { id: req.user.id }, select: { isKomperPic: true } });
       if (u?.isKomperPic) return next();
@@ -22,7 +23,7 @@ const requireManager = async (req, res, next) => {
 // Panel "Semua Pengguna" jauh lebih sensitif (lihat semua akun + reset password),
 // jadi hanya SUPERADMIN/ADMIN — PIC KOMPER tidak boleh masuk ke sini.
 const requireAdminLevel = (req, res, next) => {
-  if (['SUPERADMIN', 'ADMIN'].includes(req.user.role)) return next();
+  if (isSuperRole(req.user.role) || req.user.role === 'ADMIN') return next();
   return res.status(403).json({ error: 'Akses ditolak' });
 };
 

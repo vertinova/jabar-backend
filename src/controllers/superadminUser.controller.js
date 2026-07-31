@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const prisma = require('../lib/prisma');
 const { isForbasiConfigured, resetForbasiPassword } = require('../lib/forbasi');
+const { isSuperRole } = require('../lib/roles');
 
 // Role yang boleh dikelola lewat panel ini. SUPERADMIN TIDAK boleh membuat/menyentuh
 // akun ADMIN/SUPERADMIN/PENGCAB dll — hanya role non-privileged di daftar ini.
@@ -56,8 +57,8 @@ const createUser = async (req, res) => {
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) return res.status(400).json({ error: 'Email sudah terdaftar' });
 
-    // Hanya SUPERADMIN/ADMIN yang boleh menjadikan akun sebagai PIC KOMPER.
-    const canSetPic = ['SUPERADMIN', 'ADMIN'].includes(req.user.role);
+    // Hanya SUPERADMIN/DEVELOPER/ADMIN yang boleh menjadikan akun sebagai PIC KOMPER.
+    const canSetPic = isSuperRole(req.user.role) || req.user.role === 'ADMIN';
     const isKomperPic = canSetPic && role === 'KOMPER' && (req.body.isKomperPic === true || req.body.isKomperPic === 'true');
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -105,8 +106,8 @@ const updateUser = async (req, res) => {
       if (!MANAGEABLE_ROLES.includes(role)) return res.status(400).json({ error: 'Role tidak diizinkan' });
       data.role = role;
     }
-    // Hanya SUPERADMIN/ADMIN yang boleh mengubah status PIC.
-    if (req.body.isKomperPic !== undefined && ['SUPERADMIN', 'ADMIN'].includes(req.user.role)) {
+    // Hanya SUPERADMIN/DEVELOPER/ADMIN yang boleh mengubah status PIC.
+    if (req.body.isKomperPic !== undefined && (isSuperRole(req.user.role) || req.user.role === 'ADMIN')) {
       data.isKomperPic = req.body.isKomperPic === true || req.body.isKomperPic === 'true';
     }
     if (req.body.password) {
@@ -147,7 +148,7 @@ const deleteUser = async (req, res) => {
 // Panel read-only untuk melihat seluruh akun di aplikasi + reset password.
 // Berbeda dengan endpoint di atas yang hanya mengelola role di MANAGEABLE_ROLES.
 
-const ALL_ROLES = ['ADMIN', 'PENGCAB', 'USER', 'PENYELENGGARA', 'UMUM', 'SUPERADMIN', 'KOMPER'];
+const ALL_ROLES = ['ADMIN', 'PENGCAB', 'USER', 'PENYELENGGARA', 'UMUM', 'SUPERADMIN', 'KOMPER', 'DEVELOPER'];
 
 const allUsersSelect = {
   id: true,
@@ -233,8 +234,8 @@ const resetUserPassword = async (req, res) => {
     });
     if (!target) return res.status(404).json({ error: 'Pengguna tidak ditemukan' });
 
-    // Hanya SUPERADMIN yang boleh mereset password akun privileged.
-    if (['SUPERADMIN', 'ADMIN'].includes(target.role) && req.user.role !== 'SUPERADMIN') {
+    // Hanya SUPERADMIN/DEVELOPER yang boleh mereset password akun privileged.
+    if ((isSuperRole(target.role) || target.role === 'ADMIN') && !isSuperRole(req.user.role)) {
       return res.status(403).json({ error: 'Hanya Super Admin yang dapat mereset password akun ini' });
     }
 

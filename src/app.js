@@ -23,6 +23,7 @@ const monitoringRoutes = require('./routes/monitoring.routes');
 const paymentRoutes = require('./routes/payment.routes');
 const rankingRoutes = require('./routes/ranking.routes');
 const superadminUserRoutes = require('./routes/superadminUser.routes');
+const adminFeeRoutes = require('./routes/adminFee.routes');
 
 const app = express();
 
@@ -55,6 +56,7 @@ app.use('/api/monitoring', monitoringRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/ranking', rankingRoutes);
 app.use('/api/superadmin-users', superadminUserRoutes);
+app.use('/api/admin-fee', adminFeeRoutes);
 
 // Health check
 app.get('/api/health', async (req, res) => {

@@ -219,12 +219,19 @@ const login = async (req, res) => {
         user = await handleForbasiUserLogin(email, forbasiResult.user, password);
       }
     } else if (email) {
-      // Login with FORBASI username — verify password via FORBASI API
-      const forbasiResult = await verifyForbasiLogin(email, password);
-      if (!forbasiResult.success || !forbasiResult.user) {
-        return res.status(401).json({ error: forbasiResult.error || 'Username atau password FORBASI salah' });
+      // Akun lokal (mis. DEVELOPER) memakai username sendiri dan tidak ada di
+      // FORBASI Pusat — cek dulu di database sebelum jatuh ke FORBASI API.
+      const localUser = await prisma.user.findUnique({ where: { username: email } });
+      if (localUser && await bcrypt.compare(password, localUser.password)) {
+        user = localUser;
+      } else {
+        // Login with FORBASI username — verify password via FORBASI API
+        const forbasiResult = await verifyForbasiLogin(email, password);
+        if (!forbasiResult.success || !forbasiResult.user) {
+          return res.status(401).json({ error: forbasiResult.error || 'Username atau password FORBASI salah' });
+        }
+        user = await handleForbasiUserLogin(email, forbasiResult.user, password);
       }
-      user = await handleForbasiUserLogin(email, forbasiResult.user, password);
     } else {
       return res.status(401).json({ error: 'Username/email atau password salah' });
     }
