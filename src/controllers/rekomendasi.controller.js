@@ -465,6 +465,77 @@ const updateStatus = async (req, res) => {
   }
 };
 
+/**
+ * Review pengcab lewat API eksternal (panel Pengcab di FORBASI Pusat).
+ *
+ * Pemanggil eksternal selalu berperan ADMIN di `updateStatus`, sehingga
+ * APPROVED_PENGCAB ditolak di sana. Panel Pusat sudah memverifikasi akun
+ * Pengcab-nya sendiri, jadi endpoint ini menerima pengcabId dari URL dan
+ * membatasi aksi pada rekomendasi milik pengcab tersebut yang masih PENDING.
+ *
+ * PUT /api/external/pengcab-panel/:pengcabId/rekomendasi/:id/approve|reject
+ */
+const pengcabReviewExternal = (decision) => async (req, res) => {
+  try {
+    const pengcabId = parseInt(req.params.pengcabId);
+    const id = parseInt(req.params.id);
+    if (!Number.isInteger(pengcabId) || !Number.isInteger(id)) {
+      return res.status(400).json({ error: 'ID pengcab atau rekomendasi tidak valid' });
+    }
+
+    const isApprove = decision === 'approve';
+    const catatan = String(
+      req.body?.catatan_pengcab ?? req.body?.catatanPengcab ?? req.body?.catatan ?? ''
+    ).trim();
+    if (!isApprove && !catatan) {
+      return res.status(400).json({ error: 'Catatan alasan penolakan wajib diisi' });
+    }
+
+    const pengcab = await prisma.pengcab.findUnique({
+      where: { id: pengcabId },
+      select: { id: true, status: true },
+    });
+    if (!pengcab) return res.status(404).json({ error: 'Pengcab tidak ditemukan' });
+    if (pengcab.status !== 'AKTIF') return res.status(403).json({ error: 'Pengcab tidak aktif' });
+
+    const existing = await prisma.rekomendasiEvent.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ error: 'Data tidak ditemukan' });
+    if (existing.pengcabId !== pengcabId) {
+      return res.status(403).json({ error: 'Akses ditolak. Event bukan dari pengcab Anda.' });
+    }
+    if (existing.jenisEvent === 'E-Voting') {
+      return res.status(400).json({ error: 'Pengajuan E-Voting disetujui langsung oleh Pengda, tidak melalui Pengcab' });
+    }
+    if (existing.status !== 'PENDING') {
+      return res.status(400).json({ error: 'Pengcab hanya bisa memproses event berstatus PENDING' });
+    }
+
+    const data = isApprove
+      ? { status: 'APPROVED_PENGCAB', approvedPengcabAt: new Date(), ...(catatan ? { catatanPengcab: catatan } : {}) }
+      : { status: 'DITOLAK', catatanPengcab: catatan };
+
+    const event = await prisma.rekomendasiEvent.update({
+      where: { id },
+      data,
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+        pengcab: { select: { id: true, nama: true, kota: true } },
+      },
+    });
+
+    res.json({
+      message: isApprove ? 'Rekomendasi disetujui oleh Pengcab' : 'Rekomendasi ditolak oleh Pengcab',
+      event,
+    });
+  } catch (error) {
+    console.error('Review rekomendasi pengcab (external) error:', error);
+    res.status(500).json({ error: 'Gagal memproses review pengcab', detail: error.message });
+  }
+};
+
+const approveByPengcabExternal = pengcabReviewExternal('approve');
+const rejectByPengcabExternal = pengcabReviewExternal('reject');
+
 const remove = async (req, res) => {
   try {
     const event = await prisma.rekomendasiEvent.findUnique({ where: { id: parseInt(req.params.id) } });
@@ -515,4 +586,15 @@ const regenerateSurat = async (req, res) => {
   }
 };
 
-module.exports = { getAll, getById, create, update, uploadPoster, updateStatus, remove, regenerateSurat };
+module.exports = {
+  getAll,
+  getById,
+  create,
+  update,
+  uploadPoster,
+  updateStatus,
+  approveByPengcabExternal,
+  rejectByPengcabExternal,
+  remove,
+  regenerateSurat,
+};

@@ -305,13 +305,9 @@ PATCH /api/external/rekomendasi/:id/status
 | `catatanAdmin` | string | Ya (jika DITOLAK) | Alasan penolakan |
 | `catatanPengcab` | string | Tidak | Catatan pengcab |
 
-**Contoh - Approve level Pengcab:**
-```json
-{
-  "status": "APPROVED_PENGCAB",
-  "catatanPengcab": "Lengkap, disetujui pengcab"
-}
-```
+> `APPROVED_PENGCAB` **ditolak** di endpoint ini (`Persetujuan pengcab dilakukan
+> oleh akun pengcab, bukan admin`) — pemanggil eksternal berperan sebagai ADMIN.
+> Gunakan endpoint review pengcab di bawah untuk persetujuan level Pengcab.
 
 **Contoh - Approve final (Pengda):**
 ```json
@@ -341,7 +337,39 @@ PATCH /api/external/rekomendasi/:id/status
 }
 ```
 
-### 6. Hapus Rekomendasi
+### 7. Review Pengcab (dari panel Pengcab FORBASI Pusat)
+
+```
+PUT /api/external/pengcab-panel/:pengcabId/rekomendasi/:id/approve
+PUT /api/external/pengcab-panel/:pengcabId/rekomendasi/:id/reject
+```
+
+**Permission:** `rekomendasi:write`
+
+Dipakai saat akun Pengcab me-review lewat FORBASI Pusat. `:pengcabId` adalah ID
+pengcab di Jabar (lihat `GET /api/external/pengcab`, cocokkan `forbasiId`).
+Hanya rekomendasi milik pengcab tersebut yang berstatus `PENDING` yang bisa
+diproses; pengajuan `E-Voting` ditolak karena langsung ditangani Pengda.
+
+**Body:**
+
+| Field | Tipe | Wajib | Keterangan |
+|---|---|---|---|
+| `catatan_pengcab` | string | Ya untuk reject | Catatan/alasan pengcab (alias: `catatanPengcab`, `catatan`) |
+
+**Response:**
+```json
+{
+  "message": "Rekomendasi disetujui oleh Pengcab",
+  "event": { ... }
+}
+```
+
+Approve menyetel status ke `APPROVED_PENGCAB` + `approvedPengcabAt`; reject
+menyetel `DITOLAK` + `catatanPengcab` (bukan `catatanAdmin`, agar terlihat
+sebagai keputusan Pengcab, bukan Pengda).
+
+### 8. Hapus Rekomendasi
 
 ```
 DELETE /api/external/rekomendasi/:id

@@ -226,6 +226,12 @@ router.patch('/rekomendasi/:id/status', requirePermission('rekomendasi:write'), 
 router.post('/rekomendasi/:id/regenerate-surat', requirePermission('rekomendasi:write'), rekomendasiCtrl.regenerateSurat);
 router.delete('/rekomendasi/:id', requirePermission('rekomendasi:delete'), rekomendasiCtrl.remove);
 
+// Review Pengcab dari panel Pengcab di FORBASI Pusat. Terpisah dari
+// `/rekomendasi/:id/status` karena endpoint itu memperlakukan pemanggil
+// eksternal sebagai ADMIN, dan ADMIN tidak boleh menyetujui atas nama Pengcab.
+router.put('/pengcab-panel/:pengcabId/rekomendasi/:id/approve', requirePermission('rekomendasi:write'), rekomendasiCtrl.approveByPengcabExternal);
+router.put('/pengcab-panel/:pengcabId/rekomendasi/:id/reject', requirePermission('rekomendasi:write'), rekomendasiCtrl.rejectByPengcabExternal);
+
 // E-voting approval and revenue share from FORBASI Pusat
 router.get('/voting/events', requirePermission('voting:read'), externalVotingCtrl.listEvents);
 router.patch('/voting/events/:eventId/approval', requirePermission('voting:write'), externalVotingCtrl.updateApproval);
