@@ -1,6 +1,6 @@
 const bcrypt = require('bcryptjs');
 const prisma = require('../lib/prisma');
-const { fetchForbasiAccounts, fetchForbasiAccount, changeForbasiPassword, isForbasiConfigured, FORBASI_API_URL, FORBASI_API_KEY } = require('../lib/forbasi');
+const { fetchForbasiAccounts, fetchForbasiAccount, fetchForbasiMembersKta, changeForbasiPassword, isForbasiConfigured, FORBASI_API_URL, FORBASI_API_KEY } = require('../lib/forbasi');
 
 // ── Cache for anggota KTA data ──
 let anggotaKtaCache = { 
@@ -197,82 +197,65 @@ const ensureAnggotaKtaCache = async (forceRefresh = false) => {
   console.log('Fetching anggota KTA data from FORBASI API...');
   const startTime = Date.now();
   
-  // Fetch all USER accounts from FORBASI API
-  const accounts = await fetchForbasiAccounts({ role: 'user', per_page: 200 });
-  
+  // Satu request untuk semua anggota beserta riwayat KTA-nya. Dulu ini
+  // /accounts + /account?username= sekali per anggota (~710 request beruntun)
+  // yang menghabiskan jatah rate limit FORBASI.
+  const accounts = await fetchForbasiMembersKta();
+
   // Check if total changed (new member)
   if (!forceRefresh && anggotaKtaCache.data && accounts.length === anggotaKtaCache.lastTotal) {
     // Just refresh timestamp, use existing data
     anggotaKtaCache.lastFetch = now;
     return anggotaKtaCache.data;
   }
-  
-  // Enrich with KTA data
-  const BATCH_SIZE = 30; // Increased batch size for faster processing
+
   const allMembers = [];
   const targetYear = new Date().getFullYear().toString();
 
-  for (let i = 0; i < accounts.length; i += BATCH_SIZE) {
-    const batch = accounts.slice(i, i + BATCH_SIZE);
-    const details = await Promise.allSettled(
-      batch.map(a => fetchForbasiAccount(a.username))
-    );
+  for (const account of accounts) {
+    const ktaList = account.kta || [];
 
-    details.forEach((result, idx) => {
-      const account = batch[idx];
-      if (result.status === 'fulfilled' && result.value) {
-        const detail = result.value;
-        const ktaList = detail.kta || [];
-        
-        // Debug: log first KTA structure
-        if (ktaList.length > 0 && idx === 0) {
-          console.log('Sample KTA structure:', JSON.stringify(ktaList[0], null, 2));
+    // Pilih KTA terbaik: utamakan KTA Terbit tahun berjalan, jika tidak ada
+    // pakai yang paling baru.
+    let activeKta = null;
+    let latestKta = null;
+
+    for (const k of ktaList) {
+      if (!k || k.province !== 'Jawa Barat') continue;
+
+      if (k.status_label === 'KTA Terbit') {
+        const issuedYear = k.kta_issued_at ? k.kta_issued_at.substring(0, 4) : null;
+        if (issuedYear === targetYear) {
+          activeKta = k;
         }
-        
-        // Find best KTA (prefer current year KTA Terbit, then latest)
-        let activeKta = null;
-        let latestKta = null;
-        
-        for (const k of ktaList) {
-          if (!k || k.province !== 'Jawa Barat') continue;
-          
-          // Track active KTA (current year)
-          if (k.status_label === 'KTA Terbit') {
-            const issuedYear = k.kta_issued_at ? k.kta_issued_at.substring(0, 4) : null;
-            if (issuedYear === targetYear) {
-              activeKta = k;
-            }
-          }
-          
-          // Track latest KTA
-          if (!latestKta || (k.kta_issued_at && k.kta_issued_at > (latestKta.kta_issued_at || ''))) {
-            latestKta = k;
-          }
-        }
-        
-        const validKta = activeKta || latestKta;
-        
-        allMembers.push({
-          id: account.id,
-          username: account.username,
-          club_name: account.club_name || detail.club_name || '-',
-          city_name: account.city_name || detail.city_name || '-',
-          email: account.email || detail.email || '-',
-          phone: account.phone || detail.phone || '-',
-          school_name: validKta?.school_name || detail.school_name || '-',
-          coach_name: validKta?.coach_name || '-',
-          leader_name: validKta?.leader_name || '-',
-          club_address: validKta?.club_address || detail.address || '-',
-          kta_status: validKta?.status_label || '-',
-          kta_number: validKta?.kta_id || '-',
-          kta_issued_at: validKta?.kta_issued_at || '-',
-          total_kta: ktaList.length,
-          is_active: !!activeKta,
-        });
       }
+
+      if (!latestKta || (k.kta_issued_at && k.kta_issued_at > (latestKta.kta_issued_at || ''))) {
+        latestKta = k;
+      }
+    }
+
+    const validKta = activeKta || latestKta;
+
+    allMembers.push({
+      id: account.id,
+      username: account.username,
+      club_name: account.club_name || '-',
+      city_name: account.city_name || '-',
+      email: account.email || '-',
+      phone: account.phone || '-',
+      school_name: validKta?.school_name || account.school_name || '-',
+      coach_name: validKta?.coach_name || '-',
+      leader_name: validKta?.leader_name || '-',
+      club_address: validKta?.club_address || account.address || '-',
+      kta_status: validKta?.status_label || '-',
+      kta_number: validKta?.kta_id || '-',
+      kta_issued_at: validKta?.kta_issued_at || '-',
+      total_kta: ktaList.length,
+      is_active: !!activeKta,
     });
   }
-  
+
   // Update cache
   anggotaKtaCache = {
     data: allMembers,

@@ -146,6 +146,35 @@ async function fetchForbasiAccounts(options = {}) {
 }
 
 /**
+ * Fetch semua anggota beserta riwayat KTA-nya dalam SATU request.
+ *
+ * Menggantikan pola lama: /accounts lalu /account?username= sekali per
+ * anggota (~710 request beruntun tiap penyegaran cache), yang menghabiskan
+ * jatah rate limit FORBASI sehingga sinkronisasi gagal diam-diam.
+ *
+ * Bentuk tiap item = akun (superset /accounts) + properti `kta` berisi
+ * array riwayat KTA. Anggota tanpa KTA tetap dikembalikan dengan kta: [].
+ */
+async function fetchForbasiMembersKta() {
+  if (!isForbasiConfigured()) return [];
+
+  const response = await fetch(`${FORBASI_API_URL}/members-kta`, {
+    headers: { 'X-API-Key': FORBASI_API_KEY }
+  });
+  if (!response.ok) {
+    const retryAfter = response.headers.get('retry-after');
+    throw new Error(`FORBASI members-kta API error: ${response.status} ${response.statusText}${retryAfter ? ` (retry after ${retryAfter}s)` : ''}`);
+  }
+
+  const result = await response.json().catch(() => null);
+  if (!result || !result.success || !Array.isArray(result.data)) {
+    throw new Error(result?.message || result?.error || 'FORBASI members-kta API returned invalid response');
+  }
+
+  return result.data;
+}
+
+/**
  * Fetch single account detail from FORBASI API (v3.0)
  */
 async function fetchForbasiAccount(identifier) {
@@ -298,6 +327,7 @@ module.exports = {
   fetchPengcabDetail,
   verifyForbasiLogin,
   fetchForbasiAccounts,
+  fetchForbasiMembersKta,
   fetchForbasiAccount,
   fetchForbasiKta,
   fixForbasiFileUrl,

@@ -1,5 +1,5 @@
 const prisma = require('../lib/prisma');
-const { fetchForbasiAccounts, fetchForbasiAccount, fixForbasiFileUrl, isForbasiConfigured } = require('../lib/forbasi');
+const { fetchForbasiMembersKta, fixForbasiFileUrl, isForbasiConfigured } = require('../lib/forbasi');
 
 const nonVotingRecommendationWhere = {
   isManualRanking: false,
@@ -108,69 +108,58 @@ const ensureAnggotaCache = async (forceRefresh = false) => {
 
     anggotaRefreshPromise = (async () => {
     
-    // Fetch all USER accounts from API (with pagination)
-    const accounts = await fetchForbasiAccounts({ role: 'user', per_page: 200 });
+    // Satu request untuk semua anggota beserta riwayat KTA-nya. Dulu ini
+    // /accounts + /account?username= sekali per anggota (~710 request
+    // beruntun) yang menghabiskan jatah rate limit FORBASI.
+    const accounts = await fetchForbasiMembersKta();
     if (!accounts.length) {
       if (anggotaCache.data) return anggotaCache.data;
-      throw new Error('FORBASI accounts API returned empty data');
+      throw new Error('FORBASI members-kta API returned empty data');
     }
 
     const currentTotal = accounts.length;
     const hasNewData = currentTotal !== anggotaCache.lastTotal;
-    
+
     // If only TTL expired (no new members), just refresh timestamp and return cached
     if (!forceRefresh && !hasNewData && anggotaCache.data) {
       anggotaCache.lastFetch = now;
       return anggotaCache.data;
     }
-    
-    // New data detected or force refresh - enrich the accounts
-    const BATCH_SIZE = 20;
+
     const enriched = [];
-    
-    for (let i = 0; i < accounts.length; i += BATCH_SIZE) {
-      const batch = accounts.slice(i, i + BATCH_SIZE);
-      const details = await Promise.allSettled(
-        batch.map(a => fetchForbasiAccount(a.username || a.id))
-      );
-      
-      details.forEach((result, idx) => {
-        const account = batch[idx];
-        if (result.status === 'fulfilled' && result.value) {
-          const detail = result.value;
-          // Find KTA that:
-          // 1. Has status 'KTA Terbit'
-          // 2. Issued in current year (2026)
-          // 3. Province is 'Jawa Barat'
-          const ktaList = detail.kta || [];
-          const validKta = ktaList.find(k => {
-            if (!k || k.status_label !== 'KTA Terbit') return false;
-            // Check year from kta_issued_at (format: "2026-02-21 08:44:48")
-            const issuedYear = k.kta_issued_at ? k.kta_issued_at.substring(0, 4) : null;
-            if (issuedYear !== CURRENT_YEAR) return false;
-            // Check province
-            if (k.province !== 'Jawa Barat') return false;
-            return true;
-          });
-          
-          // Only add if has valid KTA Terbit for current year
-          if (validKta) {
-            enriched.push({
-              ...account,
-              logo_url: getForbasiLogoUrl(account, validKta),
-              school_name: validKta.school_name || detail.school_name || null,
-              coach_name: validKta.coach_name || null,
-              leader_name: validKta.leader_name || null,
-              club_address: validKta.club_address || detail.address || null,
-              kta_status: validKta.status_label,
-              kta_number: validKta.kta_id || null,
-              kta_issued_at: validKta.kta_issued_at || null,
-            });
-          }
-        }
+
+    for (const account of accounts) {
+      // Ambil KTA yang:
+      // 1. berstatus 'KTA Terbit'
+      // 2. terbit di tahun berjalan
+      // 3. provinsinya Jawa Barat
+      const ktaList = account.kta || [];
+      const validKta = ktaList.find(k => {
+        if (!k || k.status_label !== 'KTA Terbit') return false;
+        // Cek tahun dari kta_issued_at (format: "2026-02-21 08:44:48")
+        const issuedYear = k.kta_issued_at ? k.kta_issued_at.substring(0, 4) : null;
+        if (issuedYear !== CURRENT_YEAR) return false;
+        if (k.province !== 'Jawa Barat') return false;
+        return true;
       });
+
+      // Hanya masuk kalau punya KTA Terbit tahun berjalan
+      if (validKta) {
+        const { kta, ...accountFields } = account;
+        enriched.push({
+          ...accountFields,
+          logo_url: getForbasiLogoUrl(account, validKta),
+          school_name: validKta.school_name || account.school_name || null,
+          coach_name: validKta.coach_name || null,
+          leader_name: validKta.leader_name || null,
+          club_address: validKta.club_address || account.address || null,
+          kta_status: validKta.status_label,
+          kta_number: validKta.kta_id || null,
+          kta_issued_at: validKta.kta_issued_at || null,
+        });
+      }
     }
-    
+
     // Store result with timestamp for TTL tracking
     anggotaCache = { 
       data: enriched, 
