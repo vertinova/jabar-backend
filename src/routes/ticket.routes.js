@@ -660,11 +660,18 @@ router.get('/my', authenticate, async (req, res) => {
 router.use('/admin', authenticate, canManageTicketing);
 
 // Event yang bisa dipasangi tiket. Penyelenggara melihat event miliknya yang
-// sudah disetujui; admin melihat seluruh event yang tiketnya sudah disiapkan.
+// sudah disetujui; admin melihat seluruh event yang layak dipasangi tiket.
+//
+// Admin sengaja TIDAK dibatasi pada event yang konfigurasinya sudah ada: baris
+// konfigurasi baru lahir saat panel membukanya, jadi filter `ticketConfig`
+// membuat daftar admin kosong selama belum ada penyelenggara yang menyiapkan
+// tiket — dan admin tak punya jalan untuk memulainya sendiri. Event yang sudah
+// terlanjur punya konfigurasi tetap ikut walau statusnya berubah, supaya
+// penjualan yang sedang berjalan tidak hilang dari panel.
 router.get('/admin/events', async (req, res) => {
   try {
     const where = isAdminLikeRole(req.user.role)
-      ? { ticketConfig: { isNot: null } }
+      ? { OR: [{ status: 'DISETUJUI' }, { ticketConfig: { isNot: null } }] }
       : { userId: req.user.id, status: 'DISETUJUI' };
 
     const events = await prisma.rekomendasiEvent.findMany({
