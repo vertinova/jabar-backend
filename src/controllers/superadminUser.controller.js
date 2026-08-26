@@ -1,4 +1,5 @@
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 const prisma = require('../lib/prisma');
 const { isForbasiConfigured, resetForbasiPassword } = require('../lib/forbasi');
 const { isSuperRole } = require('../lib/roles');
@@ -272,4 +273,76 @@ const resetUserPassword = async (req, res) => {
   }
 };
 
-module.exports = { getRoles, listUsers, createUser, updateUser, deleteUser, listAllUsers, resetUserPassword };
+// Masa berlaku token impersonasi sengaja jauh lebih pendek dari sesi biasa:
+// token ini memegang identitas orang lain, jadi kalau tab-nya ditinggal terbuka
+// ia mati sendiri ketimbang menganggur seharian.
+const IMPERSONATION_EXPIRES_IN = '2h';
+
+// POST /api/superadmin-users/all/:id/impersonate - super admin membuka sesi
+// sebagai pengguna lain untuk menelusuri keluhan dari sisi mereka.
+//
+// Token yang terbit membawa klaim `impersonatedBy` supaya jejaknya terbaca di
+// sisi server; peran di dalam token adalah peran target, jadi seluruh guard yang
+// sudah ada memperlakukan sesi ini persis seperti pengguna aslinya - tidak ada
+// hak super yang ikut terbawa.
+const impersonateUser = async (req, res) => {
+  try {
+    const id = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID tidak valid' });
+
+    if (id === req.user.id) {
+      return res.status(400).json({ error: 'Tidak bisa masuk sebagai akun sendiri' });
+    }
+
+    const target = await prisma.user.findUnique({
+      where: { id },
+      select: {
+        id: true, name: true, email: true, role: true, phone: true, avatar: true,
+        pengcabId: true, forbasiId: true, isKomperPic: true, isActive: true,
+        pengcab: { select: { nama: true } },
+      },
+    });
+    if (!target) return res.status(404).json({ error: 'Pengguna tidak ditemukan' });
+
+    // Akun privileged tidak boleh dipinjam: seorang super admin yang masuk sebagai
+    // super admin lain menghapus jejak siapa sebenarnya yang bertindak.
+    if (isSuperRole(target.role) || target.role === 'ADMIN') {
+      return res.status(403).json({ error: 'Akun admin tidak bisa dimasuki lewat fitur ini' });
+    }
+    if (target.isActive === false) {
+      return res.status(400).json({ error: 'Akun ini nonaktif, aktifkan dulu sebelum masuk sebagai akun ini' });
+    }
+
+    const token = jwt.sign(
+      { id: target.id, email: target.email, role: target.role, impersonatedBy: req.user.id },
+      process.env.JWT_SECRET,
+      { expiresIn: IMPERSONATION_EXPIRES_IN }
+    );
+
+    console.log(
+      `[IMPERSONASI] ${req.user.email} (id=${req.user.id}, ${req.user.role}) masuk sebagai ` +
+      `${target.email} (id=${target.id}, ${target.role}) pada ${new Date().toISOString()}`
+    );
+
+    res.json({
+      message: `Masuk sebagai ${target.name}`,
+      token,
+      expiresIn: IMPERSONATION_EXPIRES_IN,
+      user: {
+        id: target.id,
+        name: target.name,
+        email: target.email,
+        role: target.role,
+        phone: target.phone,
+        avatar: target.avatar || null,
+        pengcabId: target.pengcabId,
+        pengcab: target.pengcab?.nama || null,
+        isKomperPic: target.isKomperPic || false,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal masuk sebagai pengguna', detail: error.message });
+  }
+};
+
+module.exports = { getRoles, listUsers, createUser, updateUser, deleteUser, listAllUsers, resetUserPassword, impersonateUser };

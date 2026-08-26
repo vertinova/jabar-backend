@@ -27,10 +27,18 @@ const requireAdminLevel = (req, res, next) => {
   return res.status(403).json({ error: 'Akses ditolak' });
 };
 
+const requireSuperLevel = (req, res, next) => {
+  if (isSuperRole(req.user.role)) return next();
+  return res.status(403).json({ error: 'Hanya Super Admin yang dapat melakukan aksi ini' });
+};
+
 router.use(authenticate, requireManager);
 
 router.get('/all', requireAdminLevel, ctrl.listAllUsers);
 router.post('/all/:id/reset-password', requireAdminLevel, ctrl.resetUserPassword);
+// Masuk sebagai pengguna lain dibatasi SUPERADMIN/DEVELOPER saja — ADMIN biasa
+// tidak ikut, karena fitur ini menerbitkan sesi atas nama orang lain.
+router.post('/all/:id/impersonate', requireSuperLevel, ctrl.impersonateUser);
 
 router.get('/roles', ctrl.getRoles);
 router.get('/', ctrl.listUsers);
