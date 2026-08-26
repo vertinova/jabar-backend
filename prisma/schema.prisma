@@ -647,6 +647,10 @@ model EventTicketConfig {
   soldCount             Int                  @default(0) @map("sold_count")
   // Ikut tercetak di e-ticket (mis. jam gerbang dibuka, syarat masuk).
   description           String?              @db.Text
+  // Poster khusus penjualan tiket. Bila kosong, halaman tiket jatuh kembali ke
+  // poster rekomendasi event — penyelenggara sering ingin materi promosi yang
+  // berbeda dari berkas pengajuan izinnya.
+  poster                String?
   salesStartDate        DateTime?            @map("sales_start_date")
   salesEndDate          DateTime?            @map("sales_end_date")
   approvalStatus        TicketApprovalStatus @default(PENDING) @map("approval_status")

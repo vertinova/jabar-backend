@@ -52,8 +52,29 @@ const {
 } = require('../lib/ticketing');
 const { sendTicketEmail, sendTicketEmailSafe } = require('../lib/ticketEmail');
 const { isMailerConfigured, verifyMailer } = require('../lib/mailer');
+const upload = require('../middleware/upload.middleware');
+const fs = require('fs');
+const path = require('path');
 
 // ==================== HELPER ====================
+
+const uploadDir = path.join(__dirname, '..', '..', 'uploads');
+
+// Poster lama dibuang setelah diganti supaya folder uploads tidak menumpuk
+// berkas yatim. Nama file sengaja diambil ulang dari basename: nilai yang
+// tersimpan di DB tidak pernah dipercaya sebagai jalur bebas.
+const deleteUploadedFile = (filePath) => {
+  if (!filePath || typeof filePath !== 'string') return;
+  if (!filePath.startsWith('/uploads/')) return;
+  const fullPath = path.resolve(uploadDir, path.basename(filePath));
+  if (!fullPath.startsWith(path.resolve(uploadDir))) return;
+  fs.promises.unlink(fullPath).catch((error) => {
+    if (error.code !== 'ENOENT') console.warn('Gagal menghapus poster tiket lama:', error.message);
+  });
+};
+
+const ALLOWED_POSTER_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const MAX_POSTER_SIZE = 5 * 1024 * 1024;
 
 const optionalAuthenticate = (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -290,7 +311,7 @@ router.get('/events', async (req, res) => {
         jenisEvent: event.jenisEvent,
         lokasi: event.lokasi,
         deskripsi: event.deskripsi,
-        poster: event.poster,
+        poster: config.poster || event.poster,
         penyelenggara: event.penyelenggara,
         tanggalMulai: event.tanggalMulai,
         tanggalSelesai: event.tanggalSelesai,
@@ -335,7 +356,7 @@ router.get('/events/:eventId', async (req, res) => {
       jenisEvent: event.jenisEvent,
       lokasi: event.lokasi,
       deskripsi: event.deskripsi,
-      poster: event.poster,
+      poster: config.poster || event.poster,
       penyelenggara: event.penyelenggara,
       tanggalMulai: event.tanggalMulai,
       tanggalSelesai: event.tanggalSelesai,
@@ -693,7 +714,7 @@ router.get('/admin/events', async (req, res) => {
       namaEvent: event.namaEvent,
       lokasi: event.lokasi,
       status: event.status,
-      poster: event.poster,
+      poster: event.ticketConfig?.poster || event.poster,
       penyelenggara: event.user?.name || event.penyelenggara || null,
       tanggalMulai: event.tanggalMulai,
       tanggalSelesai: event.tanggalSelesai,
@@ -765,6 +786,70 @@ router.put('/admin/event/:eventId/config', async (req, res) => {
     res.json(normalizeConfig(config));
   } catch (error) {
     res.status(500).json({ error: 'Gagal menyimpan konfigurasi tiket', detail: error.message });
+  }
+});
+
+// Poster khusus penjualan tiket. Multer menaruh berkasnya lebih dulu, jadi setiap
+// penolakan setelah itu wajib ikut membuang berkas yang terlanjur mendarat.
+router.post('/admin/event/:eventId/poster', upload.single('poster'), async (req, res) => {
+  const uploadedPath = req.file ? `/uploads/${req.file.filename}` : null;
+  try {
+    const eventId = toId(req.params.eventId);
+    if (!eventId) {
+      deleteUploadedFile(uploadedPath);
+      return res.status(400).json({ error: 'ID event tidak valid' });
+    }
+    if (!req.file) return res.status(400).json({ error: 'File poster wajib diupload' });
+    if (!(await verifyEventOwnership(req, eventId))) {
+      deleteUploadedFile(uploadedPath);
+      return res.status(403).json({ error: 'Tidak memiliki akses ke event ini' });
+    }
+    if (!ALLOWED_POSTER_TYPES.includes(req.file.mimetype)) {
+      deleteUploadedFile(uploadedPath);
+      return res.status(400).json({ error: 'Tipe file poster tidak diizinkan. Gunakan JPG, PNG, atau WEBP.' });
+    }
+    if (req.file.size > MAX_POSTER_SIZE) {
+      deleteUploadedFile(uploadedPath);
+      return res.status(400).json({ error: 'Ukuran poster terlalu besar. Maksimal 5MB.' });
+    }
+
+    const existing = await getOrCreateConfig(eventId);
+    const config = await prisma.eventTicketConfig.update({
+      where: { id: existing.id },
+      data: { poster: uploadedPath },
+      include: { types: typeInclude },
+    });
+    if (existing.poster && existing.poster !== uploadedPath) deleteUploadedFile(existing.poster);
+
+    res.json({ message: 'Poster tiket berhasil disimpan', poster: uploadedPath, config: normalizeConfig(config) });
+  } catch (error) {
+    deleteUploadedFile(uploadedPath);
+    res.status(500).json({ error: 'Gagal mengunggah poster tiket', detail: error.message });
+  }
+});
+
+// Melepas poster tiket mengembalikan halaman penjualan ke poster event.
+router.delete('/admin/event/:eventId/poster', async (req, res) => {
+  try {
+    const eventId = toId(req.params.eventId);
+    if (!eventId) return res.status(400).json({ error: 'ID event tidak valid' });
+    if (!(await verifyEventOwnership(req, eventId))) {
+      return res.status(403).json({ error: 'Tidak memiliki akses ke event ini' });
+    }
+
+    const existing = await getOrCreateConfig(eventId);
+    if (!existing.poster) return res.status(400).json({ error: 'Belum ada poster tiket yang dipasang' });
+
+    const config = await prisma.eventTicketConfig.update({
+      where: { id: existing.id },
+      data: { poster: null },
+      include: { types: typeInclude },
+    });
+    deleteUploadedFile(existing.poster);
+
+    res.json({ message: 'Poster tiket dilepas', config: normalizeConfig(config) });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal melepas poster tiket', detail: error.message });
   }
 });
 
