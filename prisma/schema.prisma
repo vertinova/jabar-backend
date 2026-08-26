@@ -9,29 +9,30 @@ datasource db {
 
 // ==================== USERS & AUTH ====================
 model User {
-  id        Int      @id @default(autoincrement())
-  name      String
-  email     String   @unique
+  id          Int      @id @default(autoincrement())
+  name        String
+  email       String   @unique
   // Username login untuk akun lokal (mis. DEVELOPER) yang tidak di-SSO ke
   // FORBASI Pusat, sehingga bisa masuk tanpa mengetik alamat email.
-  username  String?  @unique
-  password  String
-  role      Role     @default(USER)
-  phone     String?
-  avatar    String?
-  pengcabId Int?
-  forbasiId Int?     @unique
+  username    String?  @unique
+  password    String
+  role        Role     @default(USER)
+  phone       String?
+  avatar      String?
+  pengcabId   Int?
+  forbasiId   Int?     @unique
   // KOMPER yang menjadi PIC: boleh membuat/kelola akun KOMPER lain.
-  isKomperPic Boolean @default(false) @map("is_komper_pic")
+  isKomperPic Boolean  @default(false) @map("is_komper_pic")
   // Akun nonaktif tidak bisa login (dinonaktifkan oleh SUPERADMIN/PIC).
-  isActive    Boolean @default(true) @map("is_active")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   pengcab            Pengcab?             @relation(fields: [pengcabId], references: [id], onDelete: SetNull)
   rekomendasiEvents  RekomendasiEvent[]
   pendaftaranKejurda PendaftaranKejurda[]
   withdrawalRequests WithdrawalRequest[]
+  ticketOrders       TicketOrder[]        @relation("TicketOrderBuyer")
 
   @@map("users")
 }
@@ -122,6 +123,8 @@ model RekomendasiEvent {
   votingConfig    EventVotingConfig?
   votingPurchases VotingPurchase[]
   rankingResults  RankingResult[]
+  ticketConfig    EventTicketConfig?
+  ticketOrders    TicketOrder[]
 
   @@map("rekomendasi_events")
 }
@@ -577,4 +580,182 @@ model ApiKeyLog {
 
   @@index([apiKeyId, createdAt])
   @@map("api_key_logs")
+}
+
+// ==================== E-TICKETING ====================
+//
+// Tiket dijual per event rekomendasi, sejajar dengan modul e-voting: penyelenggara
+// menyiapkan konfigurasi & jenis tiket, SUPERADMIN yang menyetujui sekaligus
+// menetapkan persentase bagi hasil, lalu penjualan berjalan lewat QRIS Midtrans
+// (prefix order id "TKT-").
+//
+// Kuota dipesan saat pesanan dibuat, bukan saat dibayar — kalau tidak, dua pembeli
+// bisa sama-sama membayar kursi terakhir. Karena itu setiap pesanan yang berakhir
+// tanpa pembayaran (dibatalkan pembeli, ditolak/kedaluwarsa Midtrans, atau disapu
+// penyapu berkala) wajib mengembalikan kuotanya.
+//
+// Berbeda dengan SIMPASKOR, kuota di sini bertipe nullable: null berarti tanpa
+// batas dan 0 berarti benar-benar nol. Di SIMPASKOR angka 0 punya dua arti yang
+// berlawanan (tanpa batas pada jenis tiket, tidak bisa terjual pada konfigurasi)
+// dan itu tercatat sebagai jebakan lapangan yang paling sering menggigit.
+
+enum TicketApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum TicketOrderStatus {
+  PENDING
+  PAID
+  USED
+  CANCELLED
+  EXPIRED
+}
+
+enum TicketAttendeeStatus {
+  PENDING
+  PAID
+  USED
+  CANCELLED
+  EXPIRED
+}
+
+// SINGLE = satu tiket berlaku sepanjang acara. DAY = hanya berlaku pada satu
+// tanggal (validDate). PASS = terusan seluruh hari acara.
+enum TicketTypeKind {
+  SINGLE
+  DAY
+  PASS
+}
+
+// Jalur penjualan. ONLINE = pembelian publik, OTS_* = loket di lokasi acara.
+enum TicketSaleChannel {
+  ONLINE
+  OTS_CASH
+  OTS_QRIS
+}
+
+model EventTicketConfig {
+  id                    Int                  @id @default(autoincrement())
+  rekomendasiEventId    Int                  @unique @map("rekomendasi_event_id")
+  enabled               Boolean              @default(false)
+  // Harga dasar; dipakai bila event belum punya jenis tiket sama sekali.
+  price                 Decimal              @default(0) @db.Decimal(12, 2)
+  // null = tanpa batas kuota.
+  quota                 Int?
+  soldCount             Int                  @default(0) @map("sold_count")
+  // Ikut tercetak di e-ticket (mis. jam gerbang dibuka, syarat masuk).
+  description           String?              @db.Text
+  salesStartDate        DateTime?            @map("sales_start_date")
+  salesEndDate          DateTime?            @map("sales_end_date")
+  approvalStatus        TicketApprovalStatus @default(PENDING) @map("approval_status")
+  approvalNote          String?              @map("approval_note") @db.Text
+  approvedAt            DateTime?            @map("approved_at")
+  organizerSharePercent Decimal              @default(0) @map("organizer_share_percent") @db.Decimal(5, 2)
+  pengdaSharePercent    Decimal              @default(0) @map("pengda_share_percent") @db.Decimal(5, 2)
+  developerSharePercent Decimal              @default(0) @map("developer_share_percent") @db.Decimal(5, 2)
+  createdAt             DateTime             @default(now()) @map("created_at")
+  updatedAt             DateTime             @updatedAt @map("updated_at")
+
+  event  RekomendasiEvent @relation(fields: [rekomendasiEventId], references: [id], onDelete: Cascade)
+  types  TicketType[]
+  orders TicketOrder[]
+
+  @@map("event_ticket_configs")
+}
+
+model TicketType {
+  id          Int               @id @default(autoincrement())
+  configId    Int               @map("config_id")
+  config      EventTicketConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+  name        String
+  description String?           @db.Text
+  kind        TicketTypeKind    @default(SINGLE)
+  price       Decimal           @default(0) @db.Decimal(12, 2)
+  // null = tanpa batas kuota.
+  quota       Int?
+  soldCount   Int               @default(0) @map("sold_count")
+  // Hanya untuk kind DAY: tanggal berlakunya tiket di gerbang.
+  validDate   DateTime?         @map("valid_date")
+  isActive    Boolean           @default(true) @map("is_active")
+  order       Int               @default(0)
+  createdAt   DateTime          @default(now()) @map("created_at")
+  updatedAt   DateTime          @updatedAt @map("updated_at")
+
+  orders TicketOrder[]
+
+  @@index([configId])
+  @@map("ticket_types")
+}
+
+model TicketOrder {
+  id                    Int               @id @default(autoincrement())
+  rekomendasiEventId    Int               @map("rekomendasi_event_id")
+  event                 RekomendasiEvent  @relation(fields: [rekomendasiEventId], references: [id], onDelete: Cascade)
+  configId              Int               @map("config_id")
+  config                EventTicketConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+  ticketTypeId          Int?              @map("ticket_type_id")
+  ticketType            TicketType?       @relation(fields: [ticketTypeId], references: [id], onDelete: SetNull)
+  // Terisi bila pembeli sedang login, supaya tiketnya muncul di "Tiket Saya".
+  userId                Int?              @map("user_id")
+  user                  User?             @relation("TicketOrderBuyer", fields: [userId], references: [id], onDelete: SetNull)
+  buyerName             String            @map("buyer_name")
+  buyerEmail            String            @map("buyer_email")
+  buyerPhone            String?           @map("buyer_phone")
+  quantity              Int               @default(1)
+  unitPrice             Decimal           @default(0) @map("unit_price") @db.Decimal(12, 2)
+  totalAmount           Decimal           @map("total_amount") @db.Decimal(12, 2)
+  adminFee              Decimal           @default(0) @map("admin_fee") @db.Decimal(12, 2)
+  qrisFee               Decimal           @default(0) @map("qris_fee") @db.Decimal(12, 2)
+  grossAmount           Decimal?          @map("gross_amount") @db.Decimal(12, 2)
+  orderCode             String            @unique @map("order_code")
+  status                TicketOrderStatus @default(PENDING)
+  channel               TicketSaleChannel @default(ONLINE)
+  midtransOrderId       String?           @unique @map("midtrans_order_id")
+  snapToken             String?           @map("snap_token") @db.Text
+  paymentType           String?           @map("payment_type")
+  paidAt                DateTime?         @map("paid_at")
+  // Petugas loket yang melayani penjualan OTS.
+  soldById              Int?              @map("sold_by_id")
+  note                  String?           @db.Text
+  emailSentAt           DateTime?         @map("email_sent_at")
+  // Dibekukan saat pesanan dibuat supaya perubahan persentase di kemudian hari
+  // tidak menulis ulang bagi hasil transaksi yang sudah terjadi.
+  organizerSharePercent Decimal           @default(0) @map("organizer_share_percent") @db.Decimal(5, 2)
+  pengdaSharePercent    Decimal           @default(0) @map("pengda_share_percent") @db.Decimal(5, 2)
+  organizerShareAmount  Decimal           @default(0) @map("organizer_share_amount") @db.Decimal(12, 2)
+  pengdaShareAmount     Decimal           @default(0) @map("pengda_share_amount") @db.Decimal(12, 2)
+  createdAt             DateTime          @default(now()) @map("created_at")
+  updatedAt             DateTime          @updatedAt @map("updated_at")
+
+  attendees TicketAttendee[]
+
+  @@index([rekomendasiEventId])
+  @@index([configId])
+  @@index([ticketTypeId])
+  @@index([userId])
+  @@index([buyerEmail])
+  @@index([status])
+  @@map("ticket_orders")
+}
+
+model TicketAttendee {
+  id          Int                  @id @default(autoincrement())
+  orderId     Int                  @map("order_id")
+  order       TicketOrder          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  name        String
+  email       String?
+  phone       String?
+  // Kode inilah yang dipindai di gerbang (satu kode per penonton).
+  ticketCode  String               @unique @map("ticket_code")
+  status      TicketAttendeeStatus @default(PENDING)
+  usedAt      DateTime?            @map("used_at")
+  scannedById Int?                 @map("scanned_by_id")
+  createdAt   DateTime             @default(now()) @map("created_at")
+  updatedAt   DateTime             @updatedAt @map("updated_at")
+
+  @@index([orderId])
+  @@index([status])
+  @@map("ticket_attendees")
 }

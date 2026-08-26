@@ -24,6 +24,8 @@ const paymentRoutes = require('./routes/payment.routes');
 const rankingRoutes = require('./routes/ranking.routes');
 const superadminUserRoutes = require('./routes/superadminUser.routes');
 const adminFeeRoutes = require('./routes/adminFee.routes');
+const ticketRoutes = require('./routes/ticket.routes');
+const { startPendingTicketSweeper } = require('./lib/pendingTicketSweeper');
 
 const app = express();
 
@@ -57,6 +59,13 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/ranking', rankingRoutes);
 app.use('/api/superadmin-users', superadminUserRoutes);
 app.use('/api/admin-fee', adminFeeRoutes);
+app.use('/api/tickets', ticketRoutes);
+
+// Kuota tiket dipesan sejak pesanan dibuat, jadi pesanan yang pembelinya pergi
+// begitu saja harus dihanguskan agar kursinya kembali ke kolam. Webhook Midtrans
+// menutup sebagian besar kasus; penyapu ini jaring pengaman untuk notifikasi yang
+// tidak pernah sampai.
+startPendingTicketSweeper();
 
 // Health check
 app.get('/api/health', async (req, res) => {

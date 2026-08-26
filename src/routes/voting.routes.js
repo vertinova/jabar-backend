@@ -24,6 +24,13 @@ const {
   VOTING_MAX_ADMIN_FEE,
 } = require('../lib/votingPayment');
 const { ADMIN_FEE_ROLES, isAdminLikeRole, isSuperRole } = require('../lib/roles');
+// Penjualan tiket masuk ke dompet & pencairan yang sama dengan vote: penyelenggara
+// mencairkan satu saldo gabungan, bukan dua saldo terpisah per modul.
+const {
+  sumTicketOrganizerShare,
+  computeTicketGlobalPools,
+  summarizeTicketSales,
+} = require('../lib/ticketing');
 
 const optionalAuthenticate = (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -852,6 +859,44 @@ router.put('/admin/events/:eventId/poster', authenticate, canManageVoting, uploa
   }
 });
 
+// Rename a vote (title only). Votes, purchases, and results all reference the
+// event by id, so renaming never touches any tally that has already been recorded.
+router.patch('/admin/events/:eventId/title', authenticate, canManageVoting, async (req, res) => {
+  try {
+    const eventId = toId(req.params.eventId);
+    if (!eventId) return res.status(400).json({ error: 'ID event tidak valid' });
+    if (!(await verifyEventOwnership(req, eventId))) return res.status(403).json({ error: 'Tidak memiliki akses ke event ini' });
+
+    const title = String(req.body.title || '').trim();
+    if (!title) return res.status(400).json({ error: 'Judul vote wajib diisi' });
+    if (title.length > 191) return res.status(400).json({ error: 'Judul vote maksimal 191 karakter' });
+
+    const existing = await prisma.rekomendasiEvent.findUnique({
+      where: { id: eventId },
+      select: { id: true, votingConfig: { select: { id: true } } },
+    });
+    if (!existing?.votingConfig) return res.status(404).json({ error: 'Vote tidak ditemukan' });
+
+    const event = await prisma.rekomendasiEvent.update({
+      where: { id: eventId },
+      data: { namaEvent: title },
+      include: {
+        votingConfig: {
+          include: {
+            categories: {
+              include: { _count: { select: { nominees: true, votes: true } } },
+            },
+          },
+        },
+      },
+    });
+
+    res.json({ message: 'Judul vote berhasil diperbarui', event: normalizeEvent(event) });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal memperbarui judul vote', detail: error.message });
+  }
+});
+
 router.get('/admin/events', authenticate, canManageVoting, async (req, res) => {
   try {
     // Super admin only manages votes already approved by FORBASI Pusat; the owning
@@ -879,7 +924,8 @@ router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
       : { userId: req.user.id, votingConfig: { isNot: null } };
     const purchaseWhere = isAdminRole(req.user.role) ? {} : { event: { userId: req.user.id } };
     const withdrawalWhere = isAdminRole(req.user.role) ? {} : { userId: req.user.id };
-    const [purchases, paidTotals, paidByEvent, events, withdrawalByStatus] = await Promise.all([
+    const ticketScope = isAdminRole(req.user.role) ? {} : { event: { userId: req.user.id } };
+    const [purchases, paidTotals, paidByEvent, events, withdrawalByStatus, ticketSales, ticketPools] = await Promise.all([
       prisma.votingPurchase.findMany({
         where: purchaseWhere,
         orderBy: { createdAt: 'desc' },
@@ -932,6 +978,8 @@ router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
         where: withdrawalWhere,
         _sum: { amount: true },
       }),
+      summarizeTicketSales(prisma, ticketScope),
+      computeTicketGlobalPools(prisma),
     ]);
 
     // Organizer balances come from the penyelenggara request flow (beneficiaryType ORGANIZER).
@@ -939,7 +987,11 @@ router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
     const withdrawalSum = (statuses, beneficiary = 'ORGANIZER') => withdrawalByStatus
       .filter((item) => statuses.includes(item.status) && item.beneficiaryType === beneficiary)
       .reduce((sum, item) => sum + decimalToNumber(item._sum.amount), 0);
-    const organizerBalance = decimalToNumber(paidTotals._sum.organizerShareAmount);
+    // Saldo penyelenggara menggabungkan bagian vote dan bagian tiket — satu dompet,
+    // satu pencairan. Angkanya harus sama dengan computeAvailableBalance yang
+    // memvalidasi pengajuan pencairan, kalau tidak panel dan server berbeda pendapat.
+    const votingOrganizerBalance = decimalToNumber(paidTotals._sum.organizerShareAmount);
+    const organizerBalance = votingOrganizerBalance + ticketSales.organizerShare;
     const pendingWithdrawal = withdrawalSum(['PENDING', 'APPROVED']);
     const withdrawnAmount = withdrawalSum(['PAID']);
     const availableBalance = Math.max(0, organizerBalance - pendingWithdrawal - withdrawnAmount);
@@ -947,13 +999,19 @@ router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
     const developerWithdrawn = withdrawalSum(['PAID'], 'DEVELOPER');
 
     const summary = {
-      grossRevenue: decimalToNumber(paidTotals._sum.totalAmount),
+      grossRevenue: decimalToNumber(paidTotals._sum.totalAmount) + ticketSales.grossRevenue,
+      votingRevenue: decimalToNumber(paidTotals._sum.totalAmount),
+      ticketRevenue: ticketSales.grossRevenue,
       organizerBalance,
+      votingOrganizerBalance,
+      ticketOrganizerBalance: ticketSales.organizerShare,
+      soldTickets: ticketSales.soldTickets,
+      ticketOrders: ticketSales.paidOrders,
       pengdaShare: decimalToNumber(paidTotals._sum.pengdaShareAmount),
       developerShare: 0,
       pengdaNetShare: decimalToNumber(paidTotals._sum.pengdaShareAmount),
-      adminFee: decimalToNumber(paidTotals._sum.adminFee),
-      qrisFee: decimalToNumber(paidTotals._sum.qrisFee),
+      adminFee: decimalToNumber(paidTotals._sum.adminFee) + ticketSales.adminFee,
+      qrisFee: decimalToNumber(paidTotals._sum.qrisFee) + ticketSales.qrisFee,
       paidVotes: paidTotals._sum.voteCount || 0,
       paidTransactions: paidTotals._count,
       pendingWithdrawal,
@@ -995,8 +1053,13 @@ router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
         paidTransactions: paid?._count || 0,
       };
     });
-    summary.developerShare = eventSummaries.reduce((sum, event) => sum + event.developerShare, 0);
-    summary.pengdaNetShare = eventSummaries.reduce((sum, event) => sum + event.pengdaNetShare, 0);
+    // Pool Pengda & Developer mencakup kedua sumber: bagian vote per event ditambah
+    // pool tiket global yang dihitung dengan aturan pemahatan yang sama.
+    summary.developerShare = eventSummaries.reduce((sum, event) => sum + event.developerShare, 0)
+      + ticketPools.developerTotal;
+    summary.pengdaNetShare = eventSummaries.reduce((sum, event) => sum + event.pengdaNetShare, 0)
+      + ticketPools.pengdaNet;
+    summary.pengdaShare = decimalToNumber(paidTotals._sum.pengdaShareAmount) + ticketPools.pengdaGross;
     summary.pengdaAvailable = Math.max(0, summary.pengdaNetShare - pengdaWithdrawn);
     summary.developerAvailable = Math.max(0, summary.developerShare - developerWithdrawn);
 
@@ -1448,35 +1511,45 @@ const serializeWithdrawal = (item) => ({
 
 // Compute spendable balance for a given user (organizer paid share minus non-rejected withdrawals)
 const computeAvailableBalance = async (userId) => {
-  const [paidAgg, withdrawalAgg] = await Promise.all([
+  const [paidAgg, ticketShare, withdrawalAgg] = await Promise.all([
     prisma.votingPurchase.aggregate({
       where: { status: 'PAID', event: { userId } },
       _sum: { organizerShareAmount: true },
     }),
+    sumTicketOrganizerShare(prisma, userId),
     prisma.withdrawalRequest.aggregate({
       where: { userId, beneficiaryType: 'ORGANIZER', status: { in: ['PENDING', 'APPROVED', 'PAID'] } },
       _sum: { amount: true },
     }),
   ]);
-  const organizerBalance = decimalToNumber(paidAgg._sum.organizerShareAmount);
+  const votingBalance = decimalToNumber(paidAgg._sum.organizerShareAmount);
+  const organizerBalance = votingBalance + ticketShare;
   const reserved = decimalToNumber(withdrawalAgg._sum.amount);
-  return { organizerBalance, reserved, availableBalance: Math.max(0, organizerBalance - reserved) };
+  return {
+    organizerBalance,
+    votingBalance,
+    ticketBalance: ticketShare,
+    reserved,
+    availableBalance: Math.max(0, organizerBalance - reserved),
+  };
 };
 
 // Saldo akhir = total organizer earnings minus everything already cashed out (PAID).
 // Call after a withdrawal's status is set to PAID to snapshot the remaining balance.
 const computeRemainingBalance = async (userId) => {
-  const [paidAgg, withdrawnAgg] = await Promise.all([
+  const [paidAgg, ticketShare, withdrawnAgg] = await Promise.all([
     prisma.votingPurchase.aggregate({
       where: { status: 'PAID', event: { userId } },
       _sum: { organizerShareAmount: true },
     }),
+    sumTicketOrganizerShare(prisma, userId),
     prisma.withdrawalRequest.aggregate({
       where: { userId, beneficiaryType: 'ORGANIZER', status: 'PAID' },
       _sum: { amount: true },
     }),
   ]);
-  return Math.max(0, decimalToNumber(paidAgg._sum.organizerShareAmount) - decimalToNumber(withdrawnAgg._sum.amount));
+  const earned = decimalToNumber(paidAgg._sum.organizerShareAmount) + ticketShare;
+  return Math.max(0, earned - decimalToNumber(withdrawnAgg._sum.amount));
 };
 
 // Global Pengda/Developer pools across every APPROVED event. Pengda gross is the raw
@@ -1505,7 +1578,19 @@ const computeGlobalPools = async () => {
     pengdaGross += pengdaShare;
     developerTotal += split.developerShare;
   }
-  return { pengdaGross, developerTotal, pengdaNet: Math.max(0, pengdaGross - developerTotal) };
+  // Pool tiket dihitung dengan aturan yang sama lalu dijumlahkan, sehingga
+  // pencairan Pengda/Developer mencakup kedua sumber pendapatan.
+  const ticketPools = await computeTicketGlobalPools(prisma);
+  const totalPengdaGross = pengdaGross + ticketPools.pengdaGross;
+  const totalDeveloper = developerTotal + ticketPools.developerTotal;
+
+  return {
+    pengdaGross: totalPengdaGross,
+    developerTotal: totalDeveloper,
+    pengdaNet: Math.max(0, totalPengdaGross - totalDeveloper),
+    voting: { pengdaGross, developerTotal, pengdaNet: Math.max(0, pengdaGross - developerTotal) },
+    ticket: ticketPools,
+  };
 };
 
 // Available balance for a global pool (PENGDA / DEVELOPER) = pool total minus everything

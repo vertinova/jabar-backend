@@ -15,6 +15,7 @@ const prisma = require('../lib/prisma');
 const { authenticate } = require('../middleware/auth.middleware');
 const { ADMIN_FEE_ROLES } = require('../lib/roles');
 const { VOTING_ADMIN_FEE_PER_VOTE, VOTING_MAX_ADMIN_FEE } = require('../lib/votingPayment');
+const { TICKET_ADMIN_FEE_PER_TICKET, TICKET_EARNED_STATUSES } = require('../lib/ticketing');
 
 const PURCHASE_STATUSES = ['PENDING', 'PAID', 'CANCELLED', 'EXPIRED'];
 
@@ -89,6 +90,121 @@ const buildRawFilter = (req) => {
   return Prisma.join(conditions, ' AND ');
 };
 
+// Padanan buildWhere untuk pesanan tiket. Statusnya punya satu nilai tambahan
+// (USED = penontonnya sudah masuk gerbang) yang tetap terhitung sebagai pendapatan.
+const TICKET_STATUSES = ['PENDING', 'PAID', 'USED', 'CANCELLED', 'EXPIRED'];
+
+const buildTicketWhere = (req) => {
+  const { from, to } = parseRange(req.query);
+  const where = {};
+
+  const eventId = toId(req.query.eventId);
+  if (eventId) where.rekomendasiEventId = eventId;
+
+  if (from || to) {
+    where.createdAt = {};
+    if (from) where.createdAt.gte = from;
+    if (to) where.createdAt.lte = to;
+  }
+
+  const status = String(req.query.status || '').toUpperCase();
+  if (TICKET_STATUSES.includes(status)) where.status = status;
+
+  const term = String(req.query.search || '').trim();
+  if (term) {
+    where.OR = [
+      { buyerName: { contains: term } },
+      { buyerEmail: { contains: term } },
+      { buyerPhone: { contains: term } },
+      { orderCode: { contains: term } },
+    ];
+  }
+
+  return where;
+};
+
+// Rekap biaya admin penjualan tiket. Bentuknya sengaja sejajar dengan rekap vote
+// supaya panel bisa menampilkannya berdampingan tanpa dua cara baca yang berbeda.
+const buildTicketRecap = async (req) => {
+  const where = buildTicketWhere(req);
+  const { status: ignoredStatus, OR: ignoredSearch, ...scope } = where;
+  const earned = { in: TICKET_EARNED_STATUSES };
+
+  const [byStatus, paidTotals, paidByEvent, events] = await Promise.all([
+    prisma.ticketOrder.groupBy({
+      by: ['status'],
+      where: scope,
+      _sum: { adminFee: true, quantity: true, totalAmount: true },
+      _count: true,
+    }),
+    prisma.ticketOrder.aggregate({
+      where: { ...scope, status: earned },
+      _sum: { adminFee: true, quantity: true, totalAmount: true, qrisFee: true, grossAmount: true },
+      _count: true,
+    }),
+    prisma.ticketOrder.groupBy({
+      by: ['rekomendasiEventId'],
+      where: { ...scope, status: earned },
+      _sum: { adminFee: true, quantity: true, totalAmount: true },
+      _count: true,
+    }),
+    prisma.rekomendasiEvent.findMany({
+      where: { ticketConfig: { isNot: null } },
+      select: {
+        id: true,
+        namaEvent: true,
+        penyelenggara: true,
+        user: { select: { id: true, name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    }),
+  ]);
+
+  const statusMap = Object.fromEntries(byStatus.map((row) => [row.status, row]));
+  const statusFee = (status) => toNumber(statusMap[status]?._sum.adminFee);
+  const eventMap = new Map(events.map((event) => [event.id, event]));
+
+  const collectedFee = toNumber(paidTotals._sum.adminFee);
+  const paidTickets = paidTotals._sum.quantity || 0;
+
+  return {
+    config: { perTicket: TICKET_ADMIN_FEE_PER_TICKET },
+    summary: {
+      collectedFee,
+      paidTransactions: paidTotals._count,
+      paidTickets,
+      paidRevenue: toNumber(paidTotals._sum.totalAmount),
+      qrisFee: toNumber(paidTotals._sum.qrisFee),
+      grossAmount: toNumber(paidTotals._sum.grossAmount),
+      avgFeePerTransaction: paidTotals._count ? collectedFee / paidTotals._count : 0,
+      pendingFee: statusFee('PENDING'),
+      pendingTransactions: statusMap.PENDING?._count || 0,
+      lostFee: statusFee('EXPIRED') + statusFee('CANCELLED'),
+      lostTransactions: (statusMap.EXPIRED?._count || 0) + (statusMap.CANCELLED?._count || 0),
+    },
+    byStatus: TICKET_STATUSES.map((status) => ({
+      status,
+      transactions: statusMap[status]?._count || 0,
+      tickets: statusMap[status]?._sum.quantity || 0,
+      adminFee: statusFee(status),
+    })),
+    byEvent: paidByEvent
+      .map((row) => {
+        const event = eventMap.get(row.rekomendasiEventId);
+        return {
+          eventId: row.rekomendasiEventId,
+          eventName: event?.namaEvent || `Event #${row.rekomendasiEventId}`,
+          organizerName: event?.user?.name || event?.penyelenggara || 'Tanpa penyelenggara',
+          transactions: row._count,
+          tickets: row._sum.quantity || 0,
+          revenue: toNumber(row._sum.totalAmount),
+          adminFee: toNumber(row._sum.adminFee),
+        };
+      })
+      .sort((a, b) => b.adminFee - a.adminFee),
+  };
+};
+
 // GET /api/admin-fee — ringkasan + rekap per status, per bulan, dan per event.
 router.get('/', async (req, res) => {
   try {
@@ -98,7 +214,7 @@ router.get('/', async (req, res) => {
     const { status: _ignoredStatus, OR: _ignoredSearch, ...scope } = where;
     const rawFilter = buildRawFilter(req);
 
-    const [byStatus, paidTotals, paidByEvent, monthly, daily, events] = await Promise.all([
+    const [byStatus, paidTotals, paidByEvent, monthly, daily, events, ticket] = await Promise.all([
       prisma.votingPurchase.groupBy({
         by: ['status'],
         where: scope,
@@ -148,6 +264,7 @@ router.get('/', async (req, res) => {
         },
         orderBy: { createdAt: 'desc' },
       }),
+      buildTicketRecap(req),
     ]);
 
     const statusMap = Object.fromEntries(byStatus.map((row) => [row.status, row]));
@@ -213,6 +330,15 @@ router.get('/', async (req, res) => {
       byDay: normalizeSeries(daily).reverse(),
       byEvent: eventBreakdown,
       events: events.map((event) => ({ id: event.id, namaEvent: event.namaEvent })),
+      // Rekap biaya admin penjualan tiket, plus totalan lintas modul supaya panel
+      // bisa menyebut satu angka "pendapatan platform" tanpa menjumlah sendiri.
+      ticket,
+      combined: {
+        collectedFee: collectedFee + ticket.summary.collectedFee,
+        pendingFee: statusFee('PENDING') + ticket.summary.pendingFee,
+        lostFee: statusFee('EXPIRED') + statusFee('CANCELLED') + ticket.summary.lostFee,
+        paidTransactions: paidTransactions + ticket.summary.paidTransactions,
+      },
     });
   } catch (error) {
     res.status(500).json({ error: 'Gagal memuat rekap biaya admin', detail: error.message });
