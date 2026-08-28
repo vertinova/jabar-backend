@@ -1,5 +1,6 @@
 const prisma = require('../lib/prisma');
 const { generateSuratRekomendasi } = require('../lib/suratGenerator');
+const { skipsPengcabApproval, pengcabSkipMessage } = require('../lib/approvalFlow');
 const fs = require('fs');
 const path = require('path');
 
@@ -367,16 +368,16 @@ const updateStatus = async (req, res) => {
     const existing = await prisma.rekomendasiEvent.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ error: 'Data tidak ditemukan' });
 
-    // Pengajuan E-Voting disetujui LANGSUNG oleh Pengda (lewati Pengcab total).
-    const isVotingSubmission = existing.jenisEvent === 'E-Voting';
+    // Pengajuan E-Voting & Kejurcab disetujui LANGSUNG oleh Pengda (lewati Pengcab total).
+    const isDirectPengda = skipsPengcabApproval(existing.jenisEvent);
 
     // Role-based approval flow:
     // PENGCAB: PENDING → APPROVED_PENGCAB or DITOLAK
     // ADMIN:   APPROVED_PENGCAB → DISETUJUI or DITOLAK (also can handle PENDING for backward compat)
     if (req.user.role === 'PENGCAB') {
-      // E-Voting tidak melalui pengcab — langsung ke Pengda.
-      if (isVotingSubmission) {
-        return res.status(400).json({ error: 'Pengajuan E-Voting disetujui langsung oleh Pengda, tidak melalui Pengcab' });
+      // Jalur langsung Pengda tidak melalui pengcab.
+      if (isDirectPengda) {
+        return res.status(400).json({ error: pengcabSkipMessage(existing.jenisEvent) });
       }
       // Pengcab can only approve/reject PENDING events from their pengcab
       const pengcabUser = await prisma.user.findUnique({ where: { id: req.user.id }, select: { pengcabId: true } });
@@ -395,10 +396,11 @@ const updateStatus = async (req, res) => {
         return res.status(400).json({ error: 'Persetujuan pengcab dilakukan oleh akun pengcab, bukan admin' });
       }
       // Boleh setujui langsung dari PENDING jika: pemanggil eksternal (proxy FORBASI
-      // Pusat sebagai approver Pengda) ATAU pengajuan E-Voting (lewati pengcab).
-      // Selain itu, admin UI internal wajib lewat review pengcab dulu.
+      // Pusat sebagai approver Pengda) ATAU pengajuan jalur langsung Pengda
+      // (E-Voting, Kejurcab). Selain itu, admin UI internal wajib lewat review
+      // pengcab dulu.
       const isExternal = !!req.apiClient;
-      const allowDirectFromPending = isExternal || isVotingSubmission;
+      const allowDirectFromPending = isExternal || isDirectPengda;
       const allowedPriorStatuses = allowDirectFromPending
         ? ['PENDING', 'APPROVED_PENGCAB']
         : ['APPROVED_PENGCAB'];
@@ -503,8 +505,8 @@ const pengcabReviewExternal = (decision) => async (req, res) => {
     if (existing.pengcabId !== pengcabId) {
       return res.status(403).json({ error: 'Akses ditolak. Event bukan dari pengcab Anda.' });
     }
-    if (existing.jenisEvent === 'E-Voting') {
-      return res.status(400).json({ error: 'Pengajuan E-Voting disetujui langsung oleh Pengda, tidak melalui Pengcab' });
+    if (skipsPengcabApproval(existing.jenisEvent)) {
+      return res.status(400).json({ error: pengcabSkipMessage(existing.jenisEvent) });
     }
     if (existing.status !== 'PENDING') {
       return res.status(400).json({ error: 'Pengcab hanya bisa memproses event berstatus PENDING' });

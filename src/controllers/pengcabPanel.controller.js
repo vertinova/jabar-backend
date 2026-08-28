@@ -1,5 +1,6 @@
 const prisma = require('../lib/prisma');
 const bcrypt = require('bcryptjs');
+const { skipsPengcabApproval, pengcabReviewableWhere, pengcabSkipMessage } = require('../lib/approvalFlow');
 
 // GET /api/pengcab-panel/dashboard
 const getDashboard = async (req, res) => {
@@ -12,13 +13,8 @@ const getDashboard = async (req, res) => {
       return res.status(400).json({ error: 'Pengcab tidak ditemukan untuk user ini' });
     }
     const pengcabId = user.pengcabId;
-    const recommendationWhere = {
-      pengcabId,
-      OR: [
-        { jenisEvent: null },
-        { jenisEvent: { not: 'E-Voting' } },
-      ],
-    };
+    // E-Voting & Kejurcab langsung ke Pengda → tidak dihitung sebagai beban review pengcab.
+    const recommendationWhere = { pengcabId, ...pengcabReviewableWhere };
 
     const [totalRekomendasi, pendingRekomendasi, approvedRekomendasi, totalPendaftaran] = await Promise.all([
       prisma.rekomendasiEvent.count({ where: recommendationWhere }),
@@ -73,14 +69,8 @@ const getRekomendasi = async (req, res) => {
     if (!user?.pengcabId) return res.status(400).json({ error: 'Pengcab tidak ditemukan' });
 
     const items = await prisma.rekomendasiEvent.findMany({
-      // E-Voting tidak ditangani pengcab (langsung ke Pengda) → tidak ditampilkan.
-      where: {
-        pengcabId: user.pengcabId,
-        OR: [
-          { jenisEvent: null },
-          { jenisEvent: { not: 'E-Voting' } },
-        ],
-      },
+      // E-Voting & Kejurcab tidak ditangani pengcab (langsung ke Pengda) → tidak ditampilkan.
+      where: { pengcabId: user.pengcabId, ...pengcabReviewableWhere },
       orderBy: { createdAt: 'desc' },
       include: {
         user: { select: { id: true, name: true, email: true } },
@@ -123,7 +113,7 @@ const approveRekomendasi = async (req, res) => {
     const item = await prisma.rekomendasiEvent.findUnique({ where: { id: parseInt(req.params.id) } });
     if (!item) return res.status(404).json({ error: 'Rekomendasi tidak ditemukan' });
     if (item.pengcabId !== user.pengcabId) return res.status(403).json({ error: 'Akses ditolak' });
-    if (item.jenisEvent === 'E-Voting') return res.status(400).json({ error: 'Pengajuan E-Voting disetujui langsung oleh Pengda, bukan Pengcab' });
+    if (skipsPengcabApproval(item.jenisEvent)) return res.status(400).json({ error: pengcabSkipMessage(item.jenisEvent) });
     if (item.status !== 'PENDING') return res.status(400).json({ error: 'Status harus PENDING untuk disetujui' });
 
     const updated = await prisma.rekomendasiEvent.update({
@@ -150,7 +140,7 @@ const rejectRekomendasi = async (req, res) => {
     const item = await prisma.rekomendasiEvent.findUnique({ where: { id: parseInt(req.params.id) } });
     if (!item) return res.status(404).json({ error: 'Rekomendasi tidak ditemukan' });
     if (item.pengcabId !== user.pengcabId) return res.status(403).json({ error: 'Akses ditolak' });
-    if (item.jenisEvent === 'E-Voting') return res.status(400).json({ error: 'Pengajuan E-Voting ditangani langsung oleh Pengda, bukan Pengcab' });
+    if (skipsPengcabApproval(item.jenisEvent)) return res.status(400).json({ error: pengcabSkipMessage(item.jenisEvent) });
     if (item.status !== 'PENDING') return res.status(400).json({ error: 'Status harus PENDING untuk ditolak' });
 
     const catatan = req.body?.catatan?.trim();
