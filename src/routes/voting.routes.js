@@ -109,6 +109,43 @@ const includeConfig = {
   },
 };
 
+// Status voting menentukan urutan daftar event publik: 0 = sedang buka,
+// 1 = belum mulai, 2 = sudah selesai. Event tanpa tanggal dianggap buka karena
+// memang tidak punya batas waktu.
+const VOTING_ORDER_OPEN = 0;
+const VOTING_ORDER_UPCOMING = 1;
+const VOTING_ORDER_CLOSED = 2;
+
+const toTimestamp = (value) => {
+  if (!value) return null;
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : null;
+};
+
+const votingSortKey = (event) => {
+  const now = Date.now();
+  const startDate = toTimestamp(event.votingConfig?.startDate);
+  const endDate = toTimestamp(event.votingConfig?.endDate);
+  const fallback = toTimestamp(event.tanggalMulai);
+
+  if (startDate && startDate > now) {
+    // Yang paling dekat waktunya mulai tampil lebih dulu.
+    return { group: VOTING_ORDER_UPCOMING, sortValue: startDate, direction: 1 };
+  }
+  if (endDate && endDate < now) {
+    // Di antara yang sudah selesai, yang baru saja tutup tampil lebih dulu.
+    return { group: VOTING_ORDER_CLOSED, sortValue: endDate, direction: -1 };
+  }
+  // Vote terbaru di depan; pakai tanggal event bila config tidak punya tanggal.
+  return { group: VOTING_ORDER_OPEN, sortValue: startDate ?? fallback ?? 0, direction: -1 };
+};
+
+const compareVotingOrder = (a, b) => {
+  if (a.group !== b.group) return a.group - b.group;
+  if (a.sortValue !== b.sortValue) return (a.sortValue - b.sortValue) * a.direction;
+  return b.id - a.id;
+};
+
 const normalizeEvent = (event) => {
   if (!event) return event;
   return {
@@ -269,12 +306,31 @@ router.get('/events', async (req, res) => {
       ];
     }
 
-    const [events, total] = await Promise.all([
-      prisma.rekomendasiEvent.findMany({
-        where,
-        orderBy: { tanggalMulai: 'asc' },
-        skip,
-        take: limitNum,
+    // Urutan halaman ditentukan status voting (buka -> segera -> selesai), bukan
+    // tanggal mentah, supaya vote yang masih bisa diikuti selalu ada di halaman
+    // awal dan vote yang sudah tutup mengendap di halaman akhir. Prisma tidak bisa
+    // mengurutkan status turunan seperti ini, jadi kandidat diambil ringan dulu
+    // (id + tanggal saja), diurutkan di sini, baru halaman terpilih diambil lengkap
+    // beserta relasinya.
+    const candidates = await prisma.rekomendasiEvent.findMany({
+      where,
+      select: {
+        id: true,
+        tanggalMulai: true,
+        votingConfig: { select: { startDate: true, endDate: true } },
+      },
+    });
+
+    const total = candidates.length;
+    const pageIds = candidates
+      .map((event) => ({ id: event.id, ...votingSortKey(event) }))
+      .sort(compareVotingOrder)
+      .slice(skip, skip + limitNum)
+      .map((event) => event.id);
+
+    const events = pageIds.length
+      ? await prisma.rekomendasiEvent.findMany({
+        where: { id: { in: pageIds } },
         include: {
           votingConfig: {
             include: {
@@ -286,15 +342,16 @@ router.get('/events', async (req, res) => {
             },
           },
         },
-      }),
-      prisma.rekomendasiEvent.count({ where }),
-    ]);
+      })
+      : [];
+
+    const eventById = new Map(events.map((event) => [event.id, event]));
 
     res.json({
-      data: events.map(normalizeEvent),
+      data: pageIds.map((id) => eventById.get(id)).filter(Boolean).map(normalizeEvent),
       total,
       page: pageNum,
-      totalPages: Math.ceil(total / limitNum),
+      totalPages: Math.ceil(total / limitNum) || 1,
     });
   } catch (error) {
     res.status(500).json({ error: 'Gagal memuat event voting', detail: error.message });
