@@ -28,9 +28,12 @@ const { ADMIN_FEE_ROLES, isAdminLikeRole, isSuperRole } = require('../lib/roles'
 // mencairkan satu saldo gabungan, bukan dua saldo terpisah per modul.
 const {
   sumTicketOrganizerShare,
-  computeTicketGlobalPools,
   summarizeTicketSales,
 } = require('../lib/ticketing');
+// Pemahatan bagian Developer dari jatah Pengda kini tinggal di satu tempat, agar
+// saldo yang membatasi pencairan di sini dan panel rincian /api/saldo memakai
+// angka yang sama persis — bukan dua hitungan mirip yang selisih pembulatan.
+const { computeSharePools, carveDeveloperShare } = require('../lib/revenueShare');
 
 const optionalAuthenticate = (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -77,16 +80,10 @@ const toPositiveInteger = (value) => {
 const decimalToNumber = (value) => (value === null || value === undefined ? 0 : Number(value));
 const clampPercent = (value, max = 100) => Math.min(Math.max(Number(value) || 0, 0), max);
 
-const splitPengdaDeveloper = (grossRevenue, pengdaShareAmount, developerSharePercent) => {
-  const developerShare = Math.min(
-    decimalToNumber(pengdaShareAmount),
-    Math.round((decimalToNumber(grossRevenue) * clampPercent(developerSharePercent)) / 100)
-  );
-  return {
-    developerShare,
-    pengdaNetShare: Math.max(0, decimalToNumber(pengdaShareAmount) - developerShare),
-  };
-};
+// Bagian Developer dipahat dari jatah Pengda. Rumusnya dipusatkan di
+// lib/revenueShare supaya panel saldo, pool pencairan, dan baris di sini tidak
+// bisa lagi berbeda gara-gara salah satu salinannya lupa ikut diperbarui.
+const splitPengdaDeveloper = carveDeveloperShare;
 
 const normalizeVotingConfig = (config) => {
   if (!config) return config;
@@ -982,7 +979,7 @@ router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
     const purchaseWhere = isAdminRole(req.user.role) ? {} : { event: { userId: req.user.id } };
     const withdrawalWhere = isAdminRole(req.user.role) ? {} : { userId: req.user.id };
     const ticketScope = isAdminRole(req.user.role) ? {} : { event: { userId: req.user.id } };
-    const [purchases, paidTotals, paidByEvent, events, withdrawalByStatus, ticketSales, ticketPools] = await Promise.all([
+    const [purchases, paidTotals, paidByEvent, events, withdrawalByStatus, ticketSales, globalPools] = await Promise.all([
       prisma.votingPurchase.findMany({
         where: purchaseWhere,
         orderBy: { createdAt: 'desc' },
@@ -1036,7 +1033,9 @@ router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
         _sum: { amount: true },
       }),
       summarizeTicketSales(prisma, ticketScope),
-      computeTicketGlobalPools(prisma),
+      // Pool Pengda & Developer selalu global (vote + tiket, lintas penyelenggara)
+      // karena keduanya memang satu kas, bukan saldo per penyelenggara.
+      computeGlobalPools(),
     ]);
 
     // Organizer balances come from the penyelenggara request flow (beneficiaryType ORGANIZER).
@@ -1085,12 +1084,20 @@ router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
     };
 
     const paidEventMap = new Map(paidByEvent.map((item) => [item.rekomendasiEventId, item]));
+    // Pemahatan developer per event sudah dihitung per transaksi di computeGlobalPools;
+    // pakai angka itu supaya baris di sini sama persis dengan panel rincian saldo.
+    // Event yang tidak ada di pool (mis. milik penyelenggara yang konfigurasinya
+    // belum disetujui) jatuh kembali ke hitungan agregat di bawah.
+    const pooledVotingEvents = new Map(
+      globalPools.byEvent.filter((row) => row.source === 'VOTING').map((row) => [row.eventId, row])
+    );
     const eventSummaries = events.map((event) => {
       const paid = paidEventMap.get(event.id);
       const grossRevenue = decimalToNumber(paid?._sum.totalAmount);
       const pengdaShare = decimalToNumber(paid?._sum.pengdaShareAmount);
       const developerSharePercent = decimalToNumber(event.votingConfig?.developerSharePercent);
-      const split = splitPengdaDeveloper(grossRevenue, pengdaShare, developerSharePercent);
+      const pooled = pooledVotingEvents.get(event.id);
+      const split = pooled || splitPengdaDeveloper(grossRevenue, pengdaShare, developerSharePercent);
       return {
         eventId: event.id,
         eventName: event.namaEvent,
@@ -1110,13 +1117,16 @@ router.get('/admin/wallet', authenticate, canManageVoting, async (req, res) => {
         paidTransactions: paid?._count || 0,
       };
     });
-    // Pool Pengda & Developer mencakup kedua sumber: bagian vote per event ditambah
-    // pool tiket global yang dihitung dengan aturan pemahatan yang sama.
-    summary.developerShare = eventSummaries.reduce((sum, event) => sum + event.developerShare, 0)
-      + ticketPools.developerTotal;
-    summary.pengdaNetShare = eventSummaries.reduce((sum, event) => sum + event.pengdaNetShare, 0)
-      + ticketPools.pengdaNet;
-    summary.pengdaShare = decimalToNumber(paidTotals._sum.pengdaShareAmount) + ticketPools.pengdaGross;
+    // Pool Pengda & Developer adalah satu kas global lintas vote & tiket — diambil
+    // apa adanya dari computeGlobalPools, yang juga dipakai memvalidasi pencairan.
+    // Sebelumnya dijumlah ulang di sini dari baris event yang scope-nya mengikuti
+    // pengguna, sehingga penyelenggara melihat "pool" yang bukan pool.
+    summary.developerShare = globalPools.developerTotal;
+    summary.pengdaNetShare = globalPools.pengdaNet;
+    // `pengdaShare` tetap mengikuti scope pemanggil — kartu "Bagian Pengda" milik
+    // penyelenggara harus menyebut jatah Pengda dari event MEREKA, bukan kas Pengda
+    // se-Jabar. Yang global cuma dua baris di atas, dan hanya super admin melihatnya.
+    summary.pengdaShare = decimalToNumber(paidTotals._sum.pengdaShareAmount) + ticketSales.pengdaShare;
     summary.pengdaAvailable = Math.max(0, summary.pengdaNetShare - pengdaWithdrawn);
     summary.developerAvailable = Math.max(0, summary.developerShare - developerWithdrawn);
 
@@ -1609,46 +1619,15 @@ const computeRemainingBalance = async (userId) => {
   return Math.max(0, earned - decimalToNumber(withdrawnAgg._sum.amount));
 };
 
-// Global Pengda/Developer pools across every APPROVED event. Pengda gross is the raw
-// pengda share; developer is carved out of it (capped at the pengda share per event);
-// pengdaNet is what's left for Pengda after the developer cut.
-const computeGlobalPools = async () => {
-  const [events, paidByEvent] = await Promise.all([
-    prisma.rekomendasiEvent.findMany({
-      where: { votingConfig: { is: { approvalStatus: 'APPROVED' } } },
-      select: { id: true, votingConfig: { select: { developerSharePercent: true } } },
-    }),
-    prisma.votingPurchase.groupBy({
-      by: ['rekomendasiEventId'],
-      where: { status: 'PAID' },
-      _sum: { totalAmount: true, pengdaShareAmount: true },
-    }),
-  ]);
-  const paidMap = new Map(paidByEvent.map((item) => [item.rekomendasiEventId, item]));
-  let pengdaGross = 0;
-  let developerTotal = 0;
-  for (const event of events) {
-    const paid = paidMap.get(event.id);
-    const grossRevenue = decimalToNumber(paid?._sum.totalAmount);
-    const pengdaShare = decimalToNumber(paid?._sum.pengdaShareAmount);
-    const split = splitPengdaDeveloper(grossRevenue, pengdaShare, decimalToNumber(event.votingConfig?.developerSharePercent));
-    pengdaGross += pengdaShare;
-    developerTotal += split.developerShare;
-  }
-  // Pool tiket dihitung dengan aturan yang sama lalu dijumlahkan, sehingga
-  // pencairan Pengda/Developer mencakup kedua sumber pendapatan.
-  const ticketPools = await computeTicketGlobalPools(prisma);
-  const totalPengdaGross = pengdaGross + ticketPools.pengdaGross;
-  const totalDeveloper = developerTotal + ticketPools.developerTotal;
-
-  return {
-    pengdaGross: totalPengdaGross,
-    developerTotal: totalDeveloper,
-    pengdaNet: Math.max(0, totalPengdaGross - totalDeveloper),
-    voting: { pengdaGross, developerTotal, pengdaNet: Math.max(0, pengdaGross - developerTotal) },
-    ticket: ticketPools,
-  };
-};
+// Global Pengda/Developer pools across every APPROVED event, vote + tiket sekaligus.
+// Pengda gross is the raw pengda share; developer is carved out of it (capped at the
+// pengda share of each transaction); pengdaNet is what's left for Pengda afterwards.
+//
+// Perhitungannya dipindah ke lib/revenueShare supaya panel rincian per transaksi
+// (/api/saldo) dan validasi pencairan di sini tidak bisa lagi berbeda: keduanya
+// memahat per transaksi dengan rumus yang sama. Bentuk kembaliannya sengaja tidak
+// berubah — `byEvent` cuma tambahan, pemanggil lama tidak perlu ikut menyesuaikan.
+const computeGlobalPools = () => computeSharePools(prisma);
 
 // Available balance for a global pool (PENGDA / DEVELOPER) = pool total minus everything
 // already recorded as paid out for that beneficiary.

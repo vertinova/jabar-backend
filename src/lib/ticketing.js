@@ -108,17 +108,11 @@ const calculateTicketRevenueSplit = (totalAmount, organizerSharePercent, pengdaS
 };
 
 // Bagian Developer dipahat dari jatah Pengda (bukan tambahan di luarnya), persis
-// seperti modul voting.
+// seperti modul voting. Rumusnya tinggal satu salinan di lib/revenueShare —
+// dulu ada tiga, dan tiga salinan rumus uang adalah tiga peluang untuk berbeda.
 const splitPengdaDeveloper = (grossRevenue, pengdaShareAmount, developerSharePercent) => {
-  const percent = Math.min(Math.max(Number(developerSharePercent) || 0, 0), 100);
-  const developerShare = Math.min(
-    decimalToNumber(pengdaShareAmount),
-    Math.round((decimalToNumber(grossRevenue) * percent) / 100)
-  );
-  return {
-    developerShare,
-    pengdaNetShare: Math.max(0, decimalToNumber(pengdaShareAmount) - developerShare),
-  };
+  const { carveDeveloperShare } = require('./revenueShare');
+  return carveDeveloperShare(grossRevenue, pengdaShareAmount, developerSharePercent);
 };
 
 const isSalesWindowOpen = (config, now = new Date()) => {
@@ -383,38 +377,14 @@ const sumTicketOrganizerShare = async (db, userId) => {
 };
 
 // Pool global Pengda & Developer dari penjualan tiket seluruh event yang sudah
-// disetujui. Bagian Developer dipahat dari jatah Pengda per event (dibatasi jatah
-// Pengda event itu), persis seperti perhitungan pool voting.
+// disetujui. Bagian Developer dipahat dari jatah Pengda, persis seperti pool
+// voting — dan sejak panel rincian saldo ada, keduanya memakai satu rumus di
+// lib/revenueShare yang memahat per transaksi, sehingga total di sini selalu sama
+// dengan jumlah baris rincian yang ditampilkan super admin.
 const computeTicketGlobalPools = async (db) => {
-  const [configs, paidByEvent] = await Promise.all([
-    db.eventTicketConfig.findMany({
-      where: { approvalStatus: 'APPROVED' },
-      select: { rekomendasiEventId: true, developerSharePercent: true },
-    }),
-    db.ticketOrder.groupBy({
-      by: ['rekomendasiEventId'],
-      where: { status: { in: TICKET_EARNED_STATUSES } },
-      _sum: { totalAmount: true, pengdaShareAmount: true },
-    }),
-  ]);
-
-  const paidMap = new Map(paidByEvent.map((item) => [item.rekomendasiEventId, item]));
-  let pengdaGross = 0;
-  let developerTotal = 0;
-  for (const config of configs) {
-    const paid = paidMap.get(config.rekomendasiEventId);
-    const grossRevenue = decimalToNumber(paid?._sum.totalAmount);
-    const pengdaShare = decimalToNumber(paid?._sum.pengdaShareAmount);
-    const split = splitPengdaDeveloper(
-      grossRevenue,
-      pengdaShare,
-      decimalToNumber(config.developerSharePercent)
-    );
-    pengdaGross += pengdaShare;
-    developerTotal += split.developerShare;
-  }
-
-  return { pengdaGross, developerTotal, pengdaNet: Math.max(0, pengdaGross - developerTotal) };
+  const { computeSharePools } = require('./revenueShare');
+  const pools = await computeSharePools(db, { source: 'TICKET' });
+  return pools.ticket;
 };
 
 // Ringkasan penjualan tiket untuk kartu dompet: dipakai agar penyelenggara bisa
