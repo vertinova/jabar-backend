@@ -29,6 +29,7 @@ const { ADMIN_FEE_ROLES, isAdminLikeRole, isSuperRole } = require('../lib/roles'
 const {
   sumTicketOrganizerShare,
   summarizeTicketSales,
+  TICKET_EARNED_STATUSES,
 } = require('../lib/ticketing');
 // Pemahatan bagian Developer dari jatah Pengda kini tinggal di satu tempat, agar
 // saldo yang membatasi pencairan di sini dan panel rincian /api/saldo memakai
@@ -1644,6 +1645,116 @@ const computePoolBalance = async (beneficiaryType) => {
   return { total, withdrawn, availableBalance: Math.max(0, total - withdrawn) };
 };
 
+// Dompet tiap penyelenggara yang punya pengajuan, dirinci per event, supaya super
+// admin bisa melihat dari event mana saldo yang diminta berasal sebelum menyetujui.
+// Saldo tetap satu dompet per penyelenggara (vote + tiket) — angka per event hanya
+// asal-usulnya, bukan saldo terpisah; karena itu totalnya harus sama dengan
+// computeAvailableBalance yang memvalidasi pengajuan.
+const computeOrganizerWallets = async (userIds) => {
+  if (!userIds.length) return {};
+  const [events, voteByEvent, ticketByEvent, withdrawalByUser] = await Promise.all([
+    prisma.rekomendasiEvent.findMany({
+      where: {
+        userId: { in: userIds },
+        OR: [{ votingConfig: { isNot: null } }, { ticketConfig: { isNot: null } }],
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        userId: true,
+        namaEvent: true,
+        penyelenggara: true,
+        lokasi: true,
+        tanggalMulai: true,
+        tanggalSelesai: true,
+        poster: true,
+        votingConfig: { select: { approvalStatus: true } },
+        ticketConfig: { select: { id: true } },
+      },
+    }),
+    prisma.votingPurchase.groupBy({
+      by: ['rekomendasiEventId'],
+      where: { status: 'PAID', event: { userId: { in: userIds } } },
+      _sum: { totalAmount: true, organizerShareAmount: true, voteCount: true },
+      _count: true,
+    }),
+    prisma.ticketOrder.groupBy({
+      by: ['rekomendasiEventId'],
+      where: { status: { in: TICKET_EARNED_STATUSES }, event: { userId: { in: userIds } } },
+      _sum: { totalAmount: true, organizerShareAmount: true, quantity: true },
+      _count: true,
+    }),
+    prisma.withdrawalRequest.groupBy({
+      by: ['userId', 'status'],
+      where: { userId: { in: userIds }, beneficiaryType: 'ORGANIZER' },
+      _sum: { amount: true },
+      _count: true,
+    }),
+  ]);
+
+  const voteMap = new Map(voteByEvent.map((row) => [row.rekomendasiEventId, row]));
+  const ticketMap = new Map(ticketByEvent.map((row) => [row.rekomendasiEventId, row]));
+
+  const wallets = {};
+  const walletFor = (userId) => {
+    if (!wallets[userId]) {
+      wallets[userId] = {
+        earned: 0, votingEarned: 0, ticketEarned: 0,
+        withdrawn: 0, reserved: 0, availableBalance: 0,
+        paidCount: 0, events: [],
+      };
+    }
+    return wallets[userId];
+  };
+
+  events.forEach((event) => {
+    const vote = voteMap.get(event.id);
+    const ticket = ticketMap.get(event.id);
+    const votingShare = decimalToNumber(vote?._sum.organizerShareAmount);
+    const ticketShare = decimalToNumber(ticket?._sum.organizerShareAmount);
+    const wallet = walletFor(event.userId);
+    wallet.votingEarned += votingShare;
+    wallet.ticketEarned += ticketShare;
+    wallet.events.push({
+      id: event.id,
+      namaEvent: event.namaEvent,
+      penyelenggara: event.penyelenggara,
+      lokasi: event.lokasi,
+      tanggalMulai: event.tanggalMulai,
+      tanggalSelesai: event.tanggalSelesai,
+      poster: event.poster,
+      votingApproval: event.votingConfig?.approvalStatus || null,
+      hasTicketing: !!event.ticketConfig,
+      grossRevenue: decimalToNumber(vote?._sum.totalAmount) + decimalToNumber(ticket?._sum.totalAmount),
+      votingShare,
+      ticketShare,
+      organizerShare: votingShare + ticketShare,
+      paidVotes: vote?._sum.voteCount || 0,
+      voteTransactions: vote?._count || 0,
+      soldTickets: ticket?._sum.quantity || 0,
+      ticketOrders: ticket?._count || 0,
+    });
+  });
+
+  withdrawalByUser.forEach((row) => {
+    const wallet = walletFor(row.userId);
+    const amount = decimalToNumber(row._sum.amount);
+    if (row.status === 'PAID') {
+      wallet.withdrawn += amount;
+      wallet.paidCount += row._count;
+    } else if (row.status === 'PENDING' || row.status === 'APPROVED') {
+      wallet.reserved += amount;
+    }
+  });
+
+  Object.values(wallets).forEach((wallet) => {
+    wallet.earned = wallet.votingEarned + wallet.ticketEarned;
+    wallet.availableBalance = Math.max(0, wallet.earned - wallet.withdrawn - wallet.reserved);
+    wallet.events.sort((a, b) => b.organizerShare - a.organizerShare);
+  });
+  return wallets;
+};
+
 // List withdrawals (own for penyelenggara, all for admin)
 router.get('/admin/withdrawals', authenticate, canManageVoting, async (req, res) => {
   try {
@@ -1662,11 +1773,17 @@ router.get('/admin/withdrawals', authenticate, canManageVoting, async (req, res)
       isAdmin ? computePoolBalance('PENGDA') : Promise.resolve(null),
       isAdmin ? computePoolBalance('DEVELOPER') : Promise.resolve(null),
     ]);
+    const organizerIds = [...new Set(withdrawals
+      .filter((item) => (item.beneficiaryType || 'ORGANIZER') === 'ORGANIZER')
+      .map((item) => item.userId))];
+    const organizers = isAdmin ? await computeOrganizerWallets(organizerIds) : null;
     res.json({
       withdrawals: withdrawals.map(serializeWithdrawal),
       balance,
       // Saldo pool global Pengda & Developer (hanya untuk admin/super admin).
       pools: isAdmin ? { pengda: pengdaPool, developer: developerPool } : null,
+      // Dompet + rincian event per penyelenggara, dikunci dengan userId (admin saja).
+      organizers,
     });
   } catch (error) {
     res.status(500).json({ error: 'Gagal memuat data pencairan', detail: error.message });
