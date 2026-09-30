@@ -7,7 +7,8 @@ const sharp = require('sharp');
 const fs = require('fs');
 const path = require('path');
 const { sendMail, isMailerConfigured } = require('./mailer');
-const { isPlaceholderEmail } = require('./ticketing');
+const { isPlaceholderEmail, validityLabel } = require('./ticketing');
+const { buildTicketPdf, ticketPdfFilename } = require('./eticketPdf');
 
 const uploadDir = path.join(__dirname, '..', '..', 'uploads');
 const POSTER_CID = 'poster-event';
@@ -50,14 +51,16 @@ const formatCurrency = (value) => new Intl.NumberFormat('id-ID', {
   maximumFractionDigits: 0,
 }).format(Number(value) || 0);
 
+// Selalu WIB: server berjalan di UTC, dan tanggal berlaku tersimpan pukul 00.00
+// WIB — tanpa timeZone, email menyebutnya sehari lebih awal.
 const formatDateTime = (value) => (value
   ? new Date(value).toLocaleString('id-ID', {
-    day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jakarta',
   })
   : '-');
 
 const formatDate = (value) => (value
-  ? new Date(value).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })
+  ? new Date(value).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Jakarta' })
   : '-');
 
 const escapeHtml = (value) => String(value ?? '')
@@ -86,8 +89,11 @@ const buildTicketEmailHtml = ({ event, config, order, attendees, hasPoster = fal
     ? `${formatDate(event.tanggalMulai)}${event.tanggalSelesai && String(event.tanggalSelesai) !== String(event.tanggalMulai) ? ` – ${formatDate(event.tanggalSelesai)}` : ''}`
     : '-';
   const typeName = order.ticketType?.name ? escapeHtml(order.ticketType.name) : 'Tiket Masuk';
-  const validDate = order.ticketType?.kind === 'DAY' && order.ticketType?.validDate
-    ? `<p style="margin:8px 0 0;font-size:12px;font-weight:600;color:#b45309;">Berlaku khusus ${escapeHtml(formatDate(order.ticketType.validDate))}.</p>`
+  // Kalimat berlaku yang SAMA dengan gerbang & PDF (validityLabel), supaya email
+  // tidak menjanjikan hari yang nanti ditolak pemindai.
+  const validity = validityLabel(order.ticketType, event);
+  const validDate = validity
+    ? `<p style="margin:8px 0 0;font-size:12px;font-weight:600;color:#b45309;">Berlaku: ${escapeHtml(validity)}.</p>`
     : '';
 
   // Banner hanya dipasang bila lampirannya benar-benar jadi; kalau tidak, kepala
@@ -300,6 +306,28 @@ const sendTicketEmail = async ({ event, config, order, attendees, overrideEmail 
   // tampil di halaman penjualan.
   const poster = await buildPosterAttachment(config?.poster || event?.poster);
   if (poster) attachments.unshift(poster);
+
+  // Seluruh tiket juga dikirim sebagai satu PDF: email berisi puluhan QR sering
+  // dipotong penyedia email tepat di bagian tiketnya. Gagal menyusun PDF tidak
+  // boleh menggagalkan email — QR di badan email tetap sah.
+  try {
+    const pdf = await buildTicketPdf({
+      eventTitle: event?.namaEvent || 'Event',
+      eventDate: event?.tanggalMulai,
+      venue: event?.lokasi || null,
+      buyerName: order.buyerName,
+      orderCode: order.orderCode,
+      totalAmount: order.totalAmount,
+      ticketTypeName: order.ticketType?.name || 'Tiket Masuk',
+      validity: validityLabel(order.ticketType, event),
+      description: config?.description || null,
+      posterPath: config?.poster || event?.poster || null,
+      tickets: recipients.map((attendee) => ({ name: attendee.name, ticketCode: attendee.ticketCode })),
+    });
+    attachments.push({ filename: ticketPdfFilename(order.orderCode), content: pdf, contentType: 'application/pdf' });
+  } catch (error) {
+    console.warn(`[Ticket] PDF e-ticket ${order.orderCode} gagal disusun:`, error.message);
+  }
 
   return sendMail({
     to,

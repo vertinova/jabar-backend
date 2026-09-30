@@ -126,7 +126,7 @@ const isSalesWindowOpen = (config, now = new Date()) => {
 const getSalesClosedReason = (event, config, now = new Date()) => {
   if (!event || event.status !== 'DISETUJUI') return 'Tiket belum tersedia untuk event ini';
   if (!config || !config.enabled) return 'Penjualan tiket belum dibuka';
-  if (config.approvalStatus !== 'APPROVED') return 'Tiket belum disetujui FORBASI Pusat';
+  if (config.approvalStatus !== 'APPROVED') return 'Tiket belum disetujui super admin';
   if (config.salesStartDate && now < new Date(config.salesStartDate)) {
     return 'Penjualan tiket belum dimulai';
   }
@@ -344,17 +344,85 @@ const countTicketsForEmail = async (db, eventId, buyerEmail) => {
   return agg._sum.quantity || 0;
 };
 
-// Apakah satu tiket berlaku pada acara/tanggal yang sedang dipindai.
-// SINGLE & PASS berlaku sepanjang acara; DAY hanya pada tanggalnya.
-const isTicketValidToday = (ticketType, now = new Date()) => {
-  if (!ticketType || ticketType.kind !== 'DAY' || !ticketType.validDate) return true;
-  const valid = new Date(ticketType.validDate);
-  return (
-    valid.getFullYear() === now.getFullYear() &&
-    valid.getMonth() === now.getMonth() &&
-    valid.getDate() === now.getDate()
-  );
+// ==================== TANGGAL BERLAKU (WIB) ====================
+//
+// Keberlakuan tiket dibandingkan per HARI WIB, bukan dengan jam lokal server:
+// server produksi berjalan di UTC, jadi perbandingan getDate() menolak tiket
+// "Hari 2" di gerbang sampai pukul 07.00 WIB dan masih meloloskan tiket "Hari 1"
+// sebelum jam itu. Semua tanggal diubah ke kunci "YYYY-MM-DD" versi WIB dulu.
+const WIB_MS = 7 * 60 * 60 * 1000;
+const MAX_EVENT_DAYS = 60;
+
+const hariWib = (value) => new Date(new Date(value).getTime() + WIB_MS).toISOString().slice(0, 10);
+// "YYYY-MM-DD" → pukul 00.00 WIB hari itu. Bentuk simpan tanggal berlaku DAY.
+const awalHariWib = (key) => new Date(`${key}T00:00:00+07:00`);
+const labelHariWib = (key) => awalHariWib(key).toLocaleDateString('id-ID', {
+  weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Jakarta',
+});
+
+// Membaca tanggal berlaku kiriman panel ("YYYY-MM-DD" atau ISO penuh) menjadi
+// 00.00 WIB. Dibolak-balik supaya "2026-02-31" tidak diam-diam jadi 3 Maret.
+const parseValidDay = (raw) => {
+  if (!raw) return null;
+  const text = String(raw).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    const date = awalHariWib(text);
+    return !Number.isNaN(date.getTime()) && hariWib(date) === text ? date : null;
+  }
+  const date = new Date(text);
+  return Number.isNaN(date.getTime()) ? null : awalHariWib(hariWib(date));
 };
+
+// Seluruh tanggal kalender (WIB) yang dilalui sebuah acara, berurutan.
+const eventDaysWib = (start, end) => {
+  if (!start) return [];
+  const last = hariWib(end || start);
+  const days = [];
+  for (let cursor = new Date(`${hariWib(start)}T00:00:00Z`); days.length < MAX_EVENT_DAYS; cursor = new Date(cursor.getTime() + 86400000)) {
+    const key = cursor.toISOString().slice(0, 10);
+    if (key > last) break;
+    days.push(key);
+  }
+  return days;
+};
+
+// Hari-hari tempat sebuah tiket sah dipakai, atau null bila tak bisa dibatasi.
+//   DAY bertanggal — hanya tanggal itu.
+//   selain itu     — seluruh tanggal acaranya. Terusan termasuk: dulu terusan
+//                    tidak dibatasi tanggal sama sekali, jadi lolos bahkan
+//                    sebulan sebelum acaranya dimulai.
+const validDaysForTicket = (ticketType, event) => {
+  if (ticketType?.kind === 'DAY' && ticketType.validDate) return [hariWib(ticketType.validDate)];
+  const days = eventDaysWib(event?.tanggalMulai, event?.tanggalSelesai);
+  return days.length > 0 ? days : null;
+};
+
+const labelDaysWib = (days) => {
+  if (days.length === 1) return labelHariWib(days[0]);
+  return `${labelHariWib(days[0])} s.d. ${labelHariWib(days[days.length - 1])}`;
+};
+
+// Alasan penolakan bila tiket dipindai di luar harinya, atau null bila sah.
+const rejectOutsideDate = (ticketType, event, now = new Date()) => {
+  const days = validDaysForTicket(ticketType, event);
+  if (!days || days.includes(hariWib(now))) return null;
+  return `Tiket ini hanya berlaku pada ${labelDaysWib(days)}`;
+};
+
+// Kapan tiket sah dipakai, untuk layar pemindai & e-ticket — dari aturan yang
+// SAMA dengan rejectOutsideDate supaya keterangan tak pernah berbeda dari alasan
+// penolakannya.
+const validityLabel = (ticketType, event) => {
+  const days = validDaysForTicket(ticketType, event);
+  if (days) {
+    const label = labelDaysWib(days);
+    return ticketType?.kind === 'PASS' && days.length > 1 ? `${label} · sekali masuk` : label;
+  }
+  return ticketType?.kind === 'PASS' ? 'Sekali masuk, hari mana saja' : null;
+};
+
+// Dipertahankan untuk pemanggil lama; kini memakai aturan WIB yang sama.
+const isTicketValidToday = (ticketType, now = new Date(), event = null) => !rejectOutsideDate(ticketType, event, now);
 
 // ==================== SALDO PENJUALAN TIKET ====================
 //
@@ -444,6 +512,14 @@ module.exports = {
   syncSoldCount,
   countTicketsForEmail,
   isTicketValidToday,
+  hariWib,
+  awalHariWib,
+  labelHariWib,
+  parseValidDay,
+  eventDaysWib,
+  validDaysForTicket,
+  rejectOutsideDate,
+  validityLabel,
   PLACEHOLDER_EMAIL_DOMAIN,
   isPlaceholderEmail,
   TICKET_EARNED_STATUSES,

@@ -48,11 +48,17 @@ const {
   markOrderPaid,
   syncSoldCount,
   countTicketsForEmail,
-  isTicketValidToday,
+  hariWib,
+  labelHariWib,
+  parseValidDay,
+  eventDaysWib,
+  rejectOutsideDate,
+  validityLabel,
   PLACEHOLDER_EMAIL_DOMAIN,
 } = require('../lib/ticketing');
 const { sendTicketEmail, sendTicketEmailSafe } = require('../lib/ticketEmail');
 const { isMailerConfigured, verifyMailer } = require('../lib/mailer');
+const { buildTicketPdf, ticketPdfFilename } = require('../lib/eticketPdf');
 const upload = require('../middleware/upload.middleware');
 const fs = require('fs');
 const path = require('path');
@@ -60,6 +66,80 @@ const path = require('path');
 // ==================== HELPER ====================
 
 const uploadDir = path.join(__dirname, '..', '..', 'uploads');
+
+// Mencatat masuk gerbang ke log. Best-effort: gagal MENCATAT tidak boleh menolak
+// penonton yang tiketnya sah — statusnya sudah berubah, yang hilang hanya satu
+// baris riwayat.
+const recordCheckins = async (db, { eventId, orderId, attendeeIds, scannedAt, scannedById = null, source = 'SCAN' }) => {
+  if (!attendeeIds || attendeeIds.length === 0) return;
+  try {
+    await db.ticketCheckin.createMany({
+      data: attendeeIds.map((attendeeId) => ({
+        rekomendasiEventId: eventId,
+        orderId,
+        attendeeId,
+        scannedAt,
+        scannedById,
+        source,
+      })),
+    });
+  } catch (error) {
+    console.error('[Ticket] Gagal mencatat log masuk:', error.message);
+  }
+};
+
+// Pembatas laju sederhana per IP untuk endpoint publik yang mahal (PDF). Cukup
+// di memori: satu proses pm2, dan tujuannya hanya meredam pengunduhan beruntun.
+const createRateLimiter = ({ windowMs, max, message }) => {
+  const hits = new Map();
+  return (req, res, next) => {
+    const now = Date.now();
+    const key = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    const entry = hits.get(key);
+    if (!entry || entry.resetAt <= now) {
+      hits.set(key, { count: 1, resetAt: now + windowMs });
+      if (hits.size > 5000) {
+        for (const [storedKey, value] of hits) if (value.resetAt <= now) hits.delete(storedKey);
+      }
+      return next();
+    }
+    entry.count += 1;
+    if (entry.count > max) return res.status(429).json({ error: message });
+    return next();
+  };
+};
+const pdfLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 20,
+  message: 'Terlalu banyak permintaan unduh e-ticket. Coba lagi sebentar lagi.',
+});
+
+// Isi PDF satu pesanan dari baris DB yang sudah memuat event, config, type,
+// dan attendees. Satu penyusun untuk unduhan, pratinjau panitia, dan lampiran
+// email, supaya ketiganya persis sama.
+const pdfPayload = (order) => ({
+  eventTitle: order.event?.namaEvent || 'Event',
+  eventDate: order.event?.tanggalMulai,
+  venue: order.event?.lokasi || null,
+  buyerName: order.buyerName,
+  orderCode: order.orderCode,
+  totalAmount: decimalToNumber(order.totalAmount),
+  ticketTypeName: order.ticketType?.name || 'Tiket Masuk',
+  validity: validityLabel(order.ticketType, order.event),
+  description: order.config?.description || null,
+  posterPath: order.config?.poster || order.event?.poster || null,
+  tickets: (order.attendees || []).map((attendee) => ({ name: attendee.name, ticketCode: attendee.ticketCode })),
+});
+
+const sendPdf = async (res, order, { inline = false } = {}) => {
+  const pdf = await buildTicketPdf(pdfPayload(order));
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${ticketPdfFilename(order.orderCode)}"`);
+  res.setHeader('Content-Length', String(pdf.length));
+  // Berisi QR yang sah dipakai masuk — jangan disimpan cache bersama.
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.send(pdf);
+};
 
 // Poster lama dibuang setelah diganti supaya folder uploads tidak menumpuk
 // berkas yatim. Nama file sengaja diambil ulang dari basename: nilai yang
@@ -639,12 +719,44 @@ router.get('/order/:orderCode', async (req, res) => {
     if (!order) return res.status(404).json({ error: 'Pesanan tidak ditemukan' });
 
     res.json({
-      order: normalizeOrder(order),
+      order: { ...normalizeOrder(order), validity: validityLabel(order.ticketType, order.event) },
       event: order.event,
       ticketNote: order.config?.description || null,
     });
   } catch (error) {
     res.status(500).json({ error: 'Gagal memuat pesanan', detail: error.message });
+  }
+});
+
+const PDF_ORDER_INCLUDE = {
+  attendees: { orderBy: { id: 'asc' } },
+  ticketType: true,
+  config: { select: { description: true, poster: true } },
+  event: {
+    select: {
+      id: true, namaEvent: true, lokasi: true, poster: true, tanggalMulai: true, tanggalSelesai: true,
+    },
+  },
+};
+
+// Unduh e-ticket PDF lewat kode pesanan. Sengaja tanpa login: tiket rombongan
+// biasanya dibelikan satu orang lalu tautannya diteruskan ke yang lain.
+// `?inline=1` menampilkannya di peramban alih-alih mengunduh.
+router.get('/pdf/:orderCode', pdfLimiter, async (req, res) => {
+  try {
+    const orderCode = normalizeCode(req.params.orderCode);
+    if (!orderCode) return res.status(400).json({ error: 'Kode pesanan tidak valid' });
+
+    const order = await prisma.ticketOrder.findUnique({ where: { orderCode }, include: PDF_ORDER_INCLUDE });
+    if (!order) return res.status(404).json({ error: 'Pesanan tidak ditemukan' });
+    // QR pesanan yang belum lunas akan ditolak di gerbang — jangan dicetak.
+    if (!['PAID', 'USED'].includes(order.status)) {
+      return res.status(400).json({ error: 'E-ticket bisa diunduh setelah pembayaran dikonfirmasi.' });
+    }
+    await sendPdf(res, order, { inline: req.query.inline === '1' });
+  } catch (error) {
+    console.error('[Ticket] Gagal menyusun PDF:', error);
+    res.status(500).json({ error: 'Gagal menyusun e-ticket PDF' });
   }
 });
 
@@ -671,7 +783,11 @@ router.get('/my', authenticate, async (req, res) => {
       },
     });
 
-    res.json(orders.map((order) => ({ ...normalizeOrder(order), event: order.event })));
+    res.json(orders.map((order) => ({
+      ...normalizeOrder(order),
+      validity: validityLabel(order.ticketType, order.event),
+      event: order.event,
+    })));
   } catch (error) {
     res.status(500).json({ error: 'Gagal memuat tiket saya', detail: error.message });
   }
@@ -797,7 +913,14 @@ router.put('/admin/event/:eventId/config', async (req, res) => {
     }
 
     const existing = await getOrCreateConfig(eventId);
-    const enabled = !!req.body.enabled;
+    // `enabled` yang tidak dikirim berarti "jangan diubah", bukan "matikan":
+    // klien yang hanya menyunting harga dulu diam-diam menutup penjualan yang
+    // sedang berjalan (perbaikan yang sama sudah diterapkan di Simpaskor).
+    const enabled = req.body.enabled === undefined ? existing.enabled : !!req.body.enabled;
+    if (req.body.price !== undefined && req.body.price !== null && req.body.price !== ''
+      && !Number.isFinite(Number(req.body.price))) {
+      return res.status(400).json({ error: 'Harga tiket tidak valid' });
+    }
     const price = Math.max(0, Math.round(Number(req.body.price) || 0));
     const quota = parseQuota(req.body.quota);
     const salesStartDate = parseDate(req.body.salesStartDate);
@@ -815,7 +938,7 @@ router.put('/admin/event/:eventId/config', async (req, res) => {
     }
     if (enabled && existing.approvalStatus !== 'APPROVED') {
       return res.status(400).json({
-        error: 'Tiket belum disetujui FORBASI Pusat. Penjualan belum dapat diaktifkan.',
+        error: 'Tiket belum disetujui super admin. Penjualan belum dapat diaktifkan.',
       });
     }
 
@@ -1007,6 +1130,25 @@ router.get('/admin/event/:eventId/types', async (req, res) => {
   }
 });
 
+// Tanggal berlaku tiket harian: disimpan sebagai 00.00 WIB, dan harus jatuh di
+// salah satu hari acara — tiket untuk tanggal di luar acara hanya bisa ditolak
+// di gerbang, padahal pembelinya sudah membayar.
+const resolveValidDay = async (eventId, raw) => {
+  const validDate = parseValidDay(raw);
+  if (!validDate) return { error: 'Tiket harian wajib punya tanggal berlaku yang valid' };
+  const event = await prisma.rekomendasiEvent.findUnique({
+    where: { id: eventId },
+    select: { tanggalMulai: true, tanggalSelesai: true },
+  });
+  const days = eventDaysWib(event?.tanggalMulai, event?.tanggalSelesai);
+  if (days.length > 0 && !days.includes(hariWib(validDate))) {
+    return {
+      error: `Tanggal berlaku harus di antara ${labelHariWib(days[0])} dan ${labelHariWib(days[days.length - 1])}`,
+    };
+  }
+  return { validDate };
+};
+
 router.post('/admin/event/:eventId/types', async (req, res) => {
   try {
     const eventId = toId(req.params.eventId);
@@ -1021,9 +1163,11 @@ router.post('/admin/event/:eventId/types', async (req, res) => {
     const kind = ['SINGLE', 'DAY', 'PASS'].includes(String(req.body.kind || '').toUpperCase())
       ? String(req.body.kind).toUpperCase()
       : 'SINGLE';
-    const validDate = kind === 'DAY' ? parseDate(req.body.validDate) : null;
-    if (kind === 'DAY' && !validDate) {
-      return res.status(400).json({ error: 'Tiket harian wajib punya tanggal berlaku' });
+    let validDate = null;
+    if (kind === 'DAY') {
+      const resolved = await resolveValidDay(eventId, req.body.validDate);
+      if (resolved.error) return res.status(400).json({ error: resolved.error });
+      ({ validDate } = resolved);
     }
 
     const config = await getOrCreateConfig(eventId);
@@ -1085,9 +1229,11 @@ router.put('/admin/types/:typeId', async (req, res) => {
       const kind = ['SINGLE', 'DAY', 'PASS'].includes(String(req.body.kind || '').toUpperCase())
         ? String(req.body.kind).toUpperCase()
         : type.kind;
-      const validDate = kind === 'DAY' ? parseDate(req.body.validDate) : null;
-      if (kind === 'DAY' && !validDate) {
-        return res.status(400).json({ error: 'Tiket harian wajib punya tanggal berlaku' });
+      let validDate = null;
+      if (kind === 'DAY') {
+        const resolved = await resolveValidDay(type.config.rekomendasiEventId, req.body.validDate);
+        if (resolved.error) return res.status(400).json({ error: resolved.error });
+        ({ validDate } = resolved);
       }
       data.kind = kind;
       data.validDate = validDate;
@@ -1151,21 +1297,12 @@ router.post('/admin/event/:eventId/types/generate', async (req, res) => {
     }
 
     const basePrice = decimalToNumber(config.price);
-    const start = event?.tanggalMulai ? new Date(event.tanggalMulai) : null;
-    const end = event?.tanggalSelesai ? new Date(event.tanggalSelesai) : start;
+    // Hari dihitung dalam WIB: dengan jam lokal server (UTC), acara yang mulai
+    // 5 Okt 00.00 WIB terbaca 4 Okt dan tiket harian pertamanya salah tanggal.
+    const days = eventDaysWib(event?.tanggalMulai, event?.tanggalSelesai).slice(0, 30);
 
-    const days = [];
-    if (start && end) {
-      const cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate());
-      const last = new Date(end.getFullYear(), end.getMonth(), end.getDate());
-      while (cursor <= last && days.length < 30) {
-        days.push(new Date(cursor));
-        cursor.setDate(cursor.getDate() + 1);
-      }
-    }
-
-    const formatDay = (date) => date.toLocaleDateString('id-ID', {
-      day: 'numeric', month: 'short', year: 'numeric',
+    const formatDay = (key) => new Date(`${key}T00:00:00+07:00`).toLocaleDateString('id-ID', {
+      day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Jakarta',
     });
 
     const proposals = days.length > 1
@@ -1173,7 +1310,7 @@ router.post('/admin/event/:eventId/types/generate', async (req, res) => {
         ...days.map((day, index) => ({
           name: `Tiket Harian ${formatDay(day)}`,
           kind: 'DAY',
-          validDate: day,
+          validDate: parseValidDay(day),
           price: basePrice,
           order: index,
         })),
@@ -1363,105 +1500,265 @@ router.post('/admin/event/:eventId/ots', async (req, res) => {
 
 // ==================== GERBANG: PEMINDAIAN ====================
 
+// Urutan pemeriksaan mengikuti Simpaskor, yang sudah diuji di gerbang ramai:
+//   1. kepemilikan → 2. STATUS → 3. event yang benar → 4. tanggal → 5. sekali pakai.
+// Status sengaja didahulukan dari tanggal: tiket yang belum dibayar atau sudah
+// batal tidak sah di hari mana pun. Dengan urutan terbalik, penonton yang datang
+// di hari yang salah disuruh kembali besok — lalu besoknya baru tahu tiketnya
+// memang tidak pernah sah.
+//
+// Setiap penolakan tetap membawa `ticket` (pemegang, jenis, masa berlaku) supaya
+// petugas bisa menjelaskan ke penonton, bukan sekadar "GAGAL".
+//
+// Selain kode per penonton, KODE PESANAN juga diterima: tercetak di e-ticket dan
+// dipakai rombongan — satu pindai meng-check-in semua tiket yang belum masuk.
+const SCAN_STATUS_REASON = {
+  PENDING: 'Tiket belum dibayar',
+  CANCELLED: 'Tiket telah dibatalkan',
+  EXPIRED: 'Tiket sudah kedaluwarsa',
+};
+const SCAN_EVENT_SELECT = {
+  id: true, namaEvent: true, lokasi: true, tanggalMulai: true, tanggalSelesai: true,
+};
+
+const closeOrderIfDone = async (orderId) => {
+  try {
+    const remainingPaid = await prisma.ticketAttendee.count({ where: { orderId, status: 'PAID' } });
+    if (remainingPaid === 0) {
+      await prisma.ticketOrder.updateMany({ where: { id: orderId, status: 'PAID' }, data: { status: 'USED' } });
+    }
+    return remainingPaid;
+  } catch (error) {
+    console.error('[Ticket] Gagal menutup pesanan setelah pindai:', error.message);
+    return null;
+  }
+};
+
 router.post('/admin/scan/:ticketCode', async (req, res) => {
   try {
-    const ticketCode = normalizeCode(req.params.ticketCode);
-    if (!ticketCode) return res.status(400).json({ error: 'Kode tiket tidak valid' });
+    const code = normalizeCode(req.params.ticketCode);
+    if (!code) return res.status(400).json({ valid: false, error: 'Kode tiket tidak valid' });
+    const scanEventId = toId(req.body?.eventId);
+    const now = new Date();
 
     const attendee = await prisma.ticketAttendee.findUnique({
-      where: { ticketCode },
-      include: {
-        order: {
-          include: {
-            ticketType: true,
-            event: { select: { id: true, namaEvent: true, userId: true, lokasi: true } },
-          },
-        },
-      },
+      where: { ticketCode: code },
+      include: { order: { include: { ticketType: true, event: { select: SCAN_EVENT_SELECT } } } },
     });
-    if (!attendee) return res.status(404).json({ valid: false, error: 'Tiket tidak ditemukan' });
 
+    // ── Jalur kode pesanan (rombongan) ──
+    if (!attendee) {
+      const order = await prisma.ticketOrder.findUnique({
+        where: { orderCode: code },
+        include: {
+          ticketType: true,
+          event: { select: SCAN_EVENT_SELECT },
+          attendees: { select: { id: true, status: true, usedAt: true } },
+        },
+      });
+      if (!order) return res.status(404).json({ valid: false, error: 'Tiket tidak ditemukan', ticket: { ticketCode: code } });
+      if (!(await verifyEventOwnership(req, order.event.id))) {
+        return res.status(403).json({ valid: false, error: 'Tiket ini bukan untuk event Anda' });
+      }
+
+      const ticket = {
+        scope: 'ORDER',
+        ticketCode: code,
+        orderCode: order.orderCode,
+        holderName: order.buyerName,
+        buyerName: order.buyerName,
+        quantity: order.quantity,
+        ticketTypeName: order.ticketType?.name || 'Tiket Masuk',
+        validity: validityLabel(order.ticketType, order.event),
+        eventName: order.event.namaEvent,
+        status: order.status,
+      };
+      if (SCAN_STATUS_REASON[order.status]) {
+        return res.status(400).json({ valid: false, error: SCAN_STATUS_REASON[order.status], ticket });
+      }
+      if (scanEventId && scanEventId !== order.event.id) {
+        return res.status(400).json({ valid: false, error: `Tiket ini untuk event lain (${order.event.namaEvent})`, ticket });
+      }
+      const wrongDay = rejectOutsideDate(order.ticketType, order.event, now);
+      if (wrongDay) return res.status(400).json({ valid: false, error: wrongDay, wrongDay: true, ticket });
+
+      const pendingIds = order.attendees.filter((item) => item.status === 'PAID').map((item) => item.id);
+      if (pendingIds.length === 0) {
+        const lastUsed = order.attendees.map((item) => item.usedAt).filter(Boolean).sort().pop() || null;
+        return res.status(400).json({
+          valid: false,
+          error: 'Semua tiket di pesanan ini sudah digunakan',
+          usedAt: lastUsed,
+          ticket: { ...ticket, status: 'USED', usedAt: lastUsed },
+        });
+      }
+      await prisma.ticketAttendee.updateMany({
+        where: { id: { in: pendingIds }, status: 'PAID' },
+        data: { status: 'USED', usedAt: now, scannedById: req.user.id },
+      });
+      // Yang dicatat hanya yang benar-benar dimenangkan pindaian ini, bukan yang
+      // keduluan gerbang lain pada detik yang sama.
+      const won = await prisma.ticketAttendee.findMany({
+        where: { id: { in: pendingIds }, usedAt: now, scannedById: req.user.id },
+        select: { id: true },
+      });
+      if (won.length === 0) {
+        return res.status(400).json({ valid: false, error: 'Tiket sudah digunakan', ticket: { ...ticket, status: 'USED' } });
+      }
+      await recordCheckins(prisma, {
+        eventId: order.event.id, orderId: order.id, attendeeIds: won.map((item) => item.id), scannedAt: now, scannedById: req.user.id,
+      });
+      await closeOrderIfDone(order.id);
+
+      return res.json({
+        valid: true,
+        message: `${won.length} tiket sah — silakan masuk`,
+        checkedIn: won.length,
+        ticket: { ...ticket, status: 'USED', usedAt: now },
+        order: { orderCode: order.orderCode, buyerName: order.buyerName, quantity: order.quantity, ticketTypeName: ticket.ticketTypeName },
+        remainingInOrder: 0,
+      });
+    }
+
+    // ── Jalur kode per penonton ──
     const order = attendee.order;
-
-    // 1. Kepemilikan — bukan pemilik acara dan bukan admin, ditolak.
     if (!(await verifyEventOwnership(req, order.event.id))) {
       return res.status(403).json({ valid: false, error: 'Tiket ini bukan untuk event Anda' });
     }
 
-    // 2. Keberlakuan acara — pemindai boleh menyertakan eventId untuk memastikan
-    //    tiket dipindai di gerbang acara yang benar.
-    const scanEventId = toId(req.body?.eventId);
-    if (scanEventId && scanEventId !== order.event.id) {
-      return res.status(400).json({
-        valid: false,
-        error: `Tiket ini untuk event lain (${order.event.namaEvent})`,
-      });
-    }
-
-    // 3. Tanggal — tiket DAY hanya sah pada hari yang dicakupnya.
-    if (!isTicketValidToday(order.ticketType)) {
-      const validDate = new Date(order.ticketType.validDate).toLocaleDateString('id-ID', {
-        day: 'numeric', month: 'long', year: 'numeric',
-      });
-      return res.status(400).json({ valid: false, error: `Tiket ini hanya berlaku pada ${validDate}` });
-    }
-
-    // 4. Status — ditolak dengan menyebut sebabnya, tanpa menulis apa pun.
-    if (attendee.status === 'USED') {
-      return res.status(400).json({
-        valid: false,
-        error: 'Tiket sudah digunakan',
-        usedAt: attendee.usedAt,
-        attendeeName: attendee.name,
-      });
-    }
-    if (attendee.status !== 'PAID') {
-      const reason = {
-        PENDING: 'Tiket belum dibayar',
-        CANCELLED: 'Tiket sudah dibatalkan',
-        EXPIRED: 'Tiket sudah kedaluwarsa',
-      }[attendee.status] || 'Tiket tidak berlaku';
-      return res.status(400).json({ valid: false, error: reason });
-    }
-
-    // 5. Tandai terpakai lewat compare-and-swap: dua gerbang yang memindai kode
-    //    sama pada detik yang sama, hanya satu yang menang.
-    const claimed = await prisma.ticketAttendee.updateMany({
-      where: { id: attendee.id, status: 'PAID' },
-      data: { status: 'USED', usedAt: new Date(), scannedById: req.user.id },
-    });
-    if (claimed.count === 0) {
-      return res.status(400).json({ valid: false, error: 'Tiket sudah digunakan' });
-    }
-
-    // Ketika tidak ada lagi tiket berstatus PAID dalam satu pesanan, pesanannya
-    // ikut ditutup menjadi USED.
-    const remainingPaid = await prisma.ticketAttendee.count({
-      where: { orderId: order.id, status: 'PAID' },
-    });
-    if (remainingPaid === 0) {
-      await prisma.ticketOrder.updateMany({
-        where: { id: order.id, status: 'PAID' },
-        data: { status: 'USED' },
-      });
-    }
-
-    res.json({
-      valid: true,
-      message: 'Tiket sah — silakan masuk',
+    const ticket = {
+      scope: 'ATTENDEE',
+      ticketCode: attendee.ticketCode,
+      orderCode: order.orderCode,
+      holderName: attendee.name,
+      buyerName: order.buyerName,
+      quantity: 1,
+      ticketTypeName: order.ticketType?.name || 'Tiket Masuk',
+      validity: validityLabel(order.ticketType, order.event),
+      eventName: order.event.namaEvent,
+      status: attendee.status,
+      usedAt: attendee.usedAt,
+    };
+    // Bentuk lama tetap dikirim supaya klien yang belum diperbarui tidak patah.
+    const legacy = {
       attendee: { id: attendee.id, name: attendee.name, ticketCode: attendee.ticketCode },
       order: {
         orderCode: order.orderCode,
         buyerName: order.buyerName,
         quantity: order.quantity,
         channel: order.channel,
-        ticketTypeName: order.ticketType?.name || 'Tiket Masuk',
+        ticketTypeName: ticket.ticketTypeName,
       },
       event: { id: order.event.id, namaEvent: order.event.namaEvent, lokasi: order.event.lokasi },
-      remainingInOrder: remainingPaid,
+      attendeeName: attendee.name,
+    };
+
+    const statusReason = SCAN_STATUS_REASON[attendee.status] || SCAN_STATUS_REASON[order.status];
+    if (statusReason) return res.status(400).json({ valid: false, error: statusReason, ticket, ...legacy });
+
+    if (scanEventId && scanEventId !== order.event.id) {
+      return res.status(400).json({ valid: false, error: `Tiket ini untuk event lain (${order.event.namaEvent})`, ticket, ...legacy });
+    }
+    const wrongDay = rejectOutsideDate(order.ticketType, order.event, now);
+    if (wrongDay) return res.status(400).json({ valid: false, error: wrongDay, wrongDay: true, ticket, ...legacy });
+
+    // Satu tiket = satu kali masuk, terusan sekalipun. Terusan menentukan di hari
+    // MANA tiket boleh dipakai, bukan berapa kali.
+    if (attendee.status === 'USED') {
+      return res.status(400).json({ valid: false, error: 'Tiket sudah digunakan', usedAt: attendee.usedAt, ticket, ...legacy });
+    }
+
+    // Compare-and-swap: dua gerbang yang memindai kode sama pada detik yang sama,
+    // hanya satu yang menang; yang kalah membaca "sudah digunakan".
+    const claimed = await prisma.ticketAttendee.updateMany({
+      where: { id: attendee.id, status: 'PAID' },
+      data: { status: 'USED', usedAt: now, scannedById: req.user.id },
+    });
+    if (claimed.count === 0) {
+      const fresh = await prisma.ticketAttendee.findUnique({ where: { id: attendee.id }, select: { status: true, usedAt: true } });
+      return res.status(400).json({
+        valid: false,
+        error: fresh?.status === 'USED' ? 'Tiket sudah digunakan' : 'Tiket tidak bisa divalidasi',
+        usedAt: fresh?.usedAt || null,
+        ticket: { ...ticket, status: fresh?.status || 'USED', usedAt: fresh?.usedAt || null },
+        ...legacy,
+      });
+    }
+
+    await recordCheckins(prisma, {
+      eventId: order.event.id, orderId: order.id, attendeeIds: [attendee.id], scannedAt: now, scannedById: req.user.id,
+    });
+    const remainingPaid = await closeOrderIfDone(order.id);
+
+    res.json({
+      valid: true,
+      message: 'Tiket sah — silakan masuk',
+      checkedIn: 1,
+      ticket: { ...ticket, status: 'USED', usedAt: now },
+      ...legacy,
+      remainingInOrder: remainingPaid ?? 0,
     });
   } catch (error) {
     res.status(500).json({ valid: false, error: 'Gagal memindai tiket', detail: error.message });
+  }
+});
+
+// Daftar penonton yang sudah masuk, dibaca dari LOG (bukan usedAt), terbaru dulu.
+router.get('/admin/event/:eventId/checkins', async (req, res) => {
+  try {
+    const eventId = toId(req.params.eventId);
+    if (!eventId) return res.status(400).json({ error: 'ID event tidak valid' });
+    if (!(await verifyEventOwnership(req, eventId))) {
+      return res.status(403).json({ error: 'Tidak memiliki akses ke event ini' });
+    }
+    const limit = Math.min(50, Math.max(1, Number.parseInt(req.query.limit, 10) || 20));
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const where = { rekomendasiEventId: eventId };
+
+    const [total, rows, todayCount] = await Promise.all([
+      prisma.ticketCheckin.count({ where }),
+      prisma.ticketCheckin.findMany({
+        where,
+        orderBy: { scannedAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+        include: {
+          attendee: { select: { id: true, name: true, ticketCode: true } },
+          order: { select: { orderCode: true, buyerName: true, ticketType: { select: { name: true } } } },
+        },
+      }),
+      prisma.ticketCheckin.count({
+        where: { ...where, scannedAt: { gte: new Date(`${hariWib(new Date())}T00:00:00+07:00`) } },
+      }),
+    ]);
+
+    // Nama petugas diambil sekali untuk semua baris, bukan per baris.
+    const staffIds = [...new Set(rows.map((row) => row.scannedById).filter(Boolean))];
+    const staff = staffIds.length
+      ? await prisma.user.findMany({ where: { id: { in: staffIds } }, select: { id: true, name: true } })
+      : [];
+    const staffMap = new Map(staff.map((user) => [user.id, user.name]));
+
+    res.json({
+      data: rows.map((row) => ({
+        id: row.id,
+        attendeeId: row.attendee?.id || null,
+        name: row.attendee?.name || row.order.buyerName,
+        ticketCode: row.attendee?.ticketCode || row.order.orderCode,
+        orderCode: row.order.orderCode,
+        buyerName: row.order.buyerName,
+        ticketTypeName: row.order.ticketType?.name || 'Tiket Masuk',
+        scannedAt: row.scannedAt,
+        source: row.source,
+        scannedBy: row.scannedById ? staffMap.get(row.scannedById) || null : null,
+      })),
+      total,
+      todayCount,
+      page,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal memuat daftar masuk', detail: error.message });
   }
 });
 
@@ -1522,17 +1819,15 @@ router.get('/admin/event/:eventId/dashboard', async (req, res) => {
         _sum: { quantity: true, totalAmount: true },
         _count: true,
       }),
-      // Penonton terakhir yang masuk gerbang — panitia memantau arus dari sini.
-      prisma.ticketAttendee.findMany({
-        where: { status: 'USED', order: { rekomendasiEventId: eventId } },
-        orderBy: { usedAt: 'desc' },
+      // Penonton terakhir yang masuk gerbang — dari log masuk, panitia memantau
+      // arus dari sini.
+      prisma.ticketCheckin.findMany({
+        where: { rekomendasiEventId: eventId },
+        orderBy: { scannedAt: 'desc' },
         take: 8,
-        select: {
-          id: true,
-          name: true,
-          ticketCode: true,
-          usedAt: true,
-          order: { select: { orderCode: true, ticketType: { select: { name: true } } } },
+        include: {
+          attendee: { select: { id: true, name: true, ticketCode: true } },
+          order: { select: { orderCode: true, buyerName: true, ticketType: { select: { name: true } } } },
         },
       }),
     ]);
@@ -1593,9 +1888,10 @@ router.get('/admin/event/:eventId/dashboard', async (req, res) => {
       })),
       recentScans: recentScans.map((row) => ({
         id: row.id,
-        name: row.name,
-        ticketCode: row.ticketCode,
-        usedAt: row.usedAt,
+        name: row.attendee?.name || row.order?.buyerName,
+        ticketCode: row.attendee?.ticketCode || row.order?.orderCode,
+        usedAt: row.scannedAt,
+        source: row.source,
         orderCode: row.order?.orderCode,
         ticketTypeName: row.order?.ticketType?.name || 'Tiket Masuk',
       })),
@@ -1692,12 +1988,25 @@ router.patch('/admin/orders/:orderId', async (req, res) => {
       if (order.status !== 'PAID') {
         return res.status(400).json({ error: 'Hanya pesanan lunas yang bisa ditandai terpakai' });
       }
+      const usedAt = new Date();
       await prisma.$transaction(async (tx) => {
-        await tx.ticketAttendee.updateMany({
+        const pending = await tx.ticketAttendee.findMany({
           where: { orderId: order.id, status: 'PAID' },
-          data: { status: 'USED', usedAt: new Date(), scannedById: req.user.id },
+          select: { id: true },
+        });
+        await tx.ticketAttendee.updateMany({
+          where: { id: { in: pending.map((item) => item.id) } },
+          data: { status: 'USED', usedAt, scannedById: req.user.id },
         });
         await tx.ticketOrder.update({ where: { id: order.id }, data: { status: 'USED' } });
+        await recordCheckins(tx, {
+          eventId: order.rekomendasiEventId,
+          orderId: order.id,
+          attendeeIds: pending.map((item) => item.id),
+          scannedAt: usedAt,
+          scannedById: req.user.id,
+          source: 'MANUAL',
+        });
       });
       return res.json({ status: 'USED', message: 'Pesanan ditandai sudah terpakai' });
     }
@@ -1705,6 +2014,15 @@ router.patch('/admin/orders/:orderId', async (req, res) => {
     if (action === 'CANCELLED') {
       if (!['PENDING', 'PAID'].includes(order.status)) {
         return res.status(400).json({ error: `Pesanan berstatus ${order.status} tidak bisa dibatalkan` });
+      }
+      // Pesanan yang sebagian penontonnya sudah masuk tidak boleh dibatalkan:
+      // uangnya sudah terpakai untuk kursi yang benar-benar diduduki. Batalkan
+      // dulu check-in yang keliru bila memang salah pindai.
+      const usedCount = await prisma.ticketAttendee.count({ where: { orderId: order.id, status: 'USED' } });
+      if (usedCount > 0) {
+        return res.status(400).json({
+          error: `${usedCount} tiket di pesanan ini sudah masuk gerbang, jadi pesanan tidak bisa dibatalkan. Batalkan check-in-nya lebih dulu bila salah pindai.`,
+        });
       }
       if (order.midtransOrderId && order.status === 'PENDING' && isMidtransConfigured()) {
         try {
@@ -1768,22 +2086,23 @@ router.patch('/admin/attendees/:attendeeId', async (req, res) => {
     if (action === 'CHECKIN') {
       // Compare-and-swap yang sama dengan gerbang: bila tiketnya baru saja
       // dipindai di gerbang lain, koreksi manual ini kalah dan tidak menimpa.
+      const usedAt = new Date();
       const claimed = await prisma.ticketAttendee.updateMany({
         where: { id: attendee.id, status: 'PAID' },
-        data: { status: 'USED', usedAt: new Date(), scannedById: req.user.id },
+        data: { status: 'USED', usedAt, scannedById: req.user.id },
       });
       if (claimed.count === 0) {
         return res.status(400).json({ error: 'Hanya tiket lunas yang belum dipakai yang bisa di-check-in' });
       }
-      const remainingPaid = await prisma.ticketAttendee.count({
-        where: { orderId: attendee.order.id, status: 'PAID' },
+      await recordCheckins(prisma, {
+        eventId: attendee.order.rekomendasiEventId,
+        orderId: attendee.order.id,
+        attendeeIds: [attendee.id],
+        scannedAt: usedAt,
+        scannedById: req.user.id,
+        source: 'MANUAL',
       });
-      if (remainingPaid === 0) {
-        await prisma.ticketOrder.updateMany({
-          where: { id: attendee.order.id, status: 'PAID' },
-          data: { status: 'USED' },
-        });
-      }
+      await closeOrderIfDone(attendee.order.id);
       return res.json({ message: `${attendee.name} ditandai sudah masuk` });
     }
 
@@ -1796,6 +2115,9 @@ router.patch('/admin/attendees/:attendeeId', async (req, res) => {
           where: { id: attendee.id },
           data: { status: 'PAID', usedAt: null, scannedById: null },
         });
+        // Seluruh log masuknya ikut dihapus: satu tiket hanya punya satu kali
+        // masuk, dan tiket yang salah dipindai kemarin pun harus bisa dipulihkan.
+        await tx.ticketCheckin.deleteMany({ where: { attendeeId: attendee.id } });
         // Pesanan yang sempat ditutup USED dibuka lagi karena ada tiketnya yang
         // kembali belum terpakai.
         await tx.ticketOrder.updateMany({
@@ -1840,6 +2162,26 @@ router.get('/admin/event/:eventId/export', async (req, res) => {
     res.json({ data: orders.map(normalizeOrder), truncated: orders.length >= EXPORT_LIMIT });
   } catch (error) {
     res.status(500).json({ error: 'Gagal menyiapkan ekspor tiket', detail: error.message });
+  }
+});
+
+// Lihat e-ticket persis seperti yang diterima pembeli (panitia/admin).
+router.get('/admin/orders/:orderId/pdf', async (req, res) => {
+  try {
+    const orderId = toId(req.params.orderId);
+    if (!orderId) return res.status(400).json({ error: 'ID pesanan tidak valid' });
+    const order = await prisma.ticketOrder.findUnique({ where: { id: orderId }, include: PDF_ORDER_INCLUDE });
+    if (!order) return res.status(404).json({ error: 'Pesanan tidak ditemukan' });
+    if (!(await verifyEventOwnership(req, order.rekomendasiEventId))) {
+      return res.status(403).json({ error: 'Tidak memiliki akses ke event ini' });
+    }
+    if (!['PAID', 'USED'].includes(order.status)) {
+      return res.status(400).json({ error: 'E-ticket hanya tersedia untuk pesanan lunas' });
+    }
+    await sendPdf(res, order, { inline: req.query.inline === '1' });
+  } catch (error) {
+    console.error('[Ticket] Gagal menyusun PDF:', error);
+    res.status(500).json({ error: 'Gagal menyusun e-ticket PDF' });
   }
 });
 

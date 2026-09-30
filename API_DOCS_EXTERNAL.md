@@ -59,8 +59,6 @@ GET /api/external/api-key/info
 | `dokumen:delete` | Hapus format dokumen |
 | `config:read` | Lihat site config |
 | `config:write` | Update site config |
-| `voting:read` | Lihat pengajuan dan konfigurasi e-voting |
-| `voting:write` | Setujui/tolak e-voting dan tentukan bagi hasil |
 
 ### Error Responses
 
@@ -349,7 +347,7 @@ PUT /api/external/pengcab-panel/:pengcabId/rekomendasi/:id/reject
 Dipakai saat akun Pengcab me-review lewat FORBASI Pusat. `:pengcabId` adalah ID
 pengcab di Jabar (lihat `GET /api/external/pengcab`, cocokkan `forbasiId`).
 Hanya rekomendasi milik pengcab tersebut yang berstatus `PENDING` yang bisa
-diproses; pengajuan `E-Voting` ditolak karena langsung ditangani Pengda.
+diproses; pengajuan `E-Voting` ditolak karena langsung ditangani super admin Jabar.
 
 **Body:**
 
@@ -386,56 +384,11 @@ DELETE /api/external/rekomendasi/:id
 
 ---
 
-## E-VOTING
+## E-VOTING & E-TICKETING
 
-Endpoint ini dipakai FORBASI Pusat untuk menampilkan pengajuan vote mandiri dari
-penyelenggara di Pengda Jabar, memberikan persetujuan, dan menetapkan persentase
-bagi hasil. Penyelenggara tidak perlu mengajukan rekomendasi event terlebih dahulu.
-
-### 1. Get Pengajuan E-Voting
-
-```http
-GET /api/external/voting/events
-```
-
-**Permission:** `voting:read`
-
-Query opsional:
-
-| Query | Keterangan |
-|---|---|
-| `search` | Cari judul vote, penyelenggara, atau pemilik akun |
-| `approvalStatus` | Filter `PENDING`, `APPROVED`, atau `REJECTED` |
-
-Respons tetap memakai struktur kompatibel event. Field `id` adalah ID wadah vote,
-`namaEvent` adalah judul vote, dan `jenisEvent` bernilai `E-Voting`. Respons juga
-menyertakan akun penyelenggara, konfigurasi voting, status approval, persentase
-bagi hasil, serta kategori berikut daftar nominee.
-
-### 2. Set Approval dan Bagi Hasil
-
-```http
-PATCH /api/external/voting/events/:eventId/approval
-Content-Type: application/json
-```
-
-**Permission:** `voting:write`
-
-```json
-{
-  "approvalStatus": "APPROVED",
-  "organizerSharePercent": 70,
-  "pengdaSharePercent": 30,
-  "approvalNote": "Disetujui untuk periode voting berjalan"
-}
-```
-
-Ketentuan:
-
-- Saat `APPROVED`, total `organizerSharePercent` dan `pengdaSharePercent` wajib 100%.
-- Saat status diubah menjadi `PENDING` atau `REJECTED`, voting otomatis dinonaktifkan.
-- Persentase disimpan sebagai snapshot pada setiap pembelian vote agar histori saldo tidak berubah saat persentase berikutnya diperbarui.
-- Nama parameter `eventId` dipertahankan untuk kompatibilitas API, tetapi pada fitur ini nilainya merujuk ke wadah kampanye vote mandiri.
+Tidak tersedia lewat API eksternal. Persetujuan dan persentase bagi hasil e-voting
+maupun e-ticketing diputuskan langsung oleh super admin di panel FORBASI Jabar.
+Permission `voting:read` / `voting:write` sudah dihapus.
 
 ---
 

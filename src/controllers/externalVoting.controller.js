@@ -9,50 +9,8 @@ const normalizeConfig = (config) => config ? {
   pengdaSharePercent: decimalToNumber(config.pengdaSharePercent),
 } : null;
 
-const listEvents = async (req, res) => {
-  try {
-    const { search = '', approvalStatus } = req.query;
-    const where = { votingConfig: { isNot: null } };
-    if (search) {
-      where.OR = [
-        { namaEvent: { contains: search } },
-        { penyelenggara: { contains: search } },
-        { user: { name: { contains: search } } },
-      ];
-    }
-    if (approvalStatus) {
-      where.votingConfig = { is: { approvalStatus } };
-    }
-
-    const events = await prisma.rekomendasiEvent.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      include: {
-        user: { select: { id: true, name: true, email: true, phone: true } },
-        votingConfig: {
-          include: {
-            categories: {
-              orderBy: { order: 'asc' },
-              include: {
-                nominees: { orderBy: { voteCount: 'desc' } },
-                _count: { select: { nominees: true, votes: true } },
-              },
-            },
-          },
-        },
-        _count: { select: { votingPurchases: true } },
-      },
-    });
-
-    res.json(events.map((event) => ({
-      ...event,
-      votingConfig: normalizeConfig(event.votingConfig),
-    })));
-  } catch (error) {
-    res.status(500).json({ error: 'Gagal memuat pengajuan e-voting', detail: error.message });
-  }
-};
-
+// Dipakai route super admin PATCH /api/voting/admin/event/:eventId/approval.
+// (Dulu juga dipanggil FORBASI Pusat lewat API eksternal; jalur itu sudah ditutup.)
 const updateApproval = async (req, res) => {
   try {
     const eventId = Number.parseInt(req.params.eventId, 10);
@@ -145,4 +103,4 @@ const updateApproval = async (req, res) => {
   }
 };
 
-module.exports = { listEvents, updateApproval };
+module.exports = { updateApproval };

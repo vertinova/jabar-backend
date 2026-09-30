@@ -13,7 +13,6 @@ const dashboardCtrl = require('../controllers/dashboard.controller');
 const kategoriCtrl = require('../controllers/kategoriEvent.controller');
 const formatDokumenCtrl = require('../controllers/formatDokumen.controller');
 const siteConfigCtrl = require('../controllers/siteConfig.controller');
-const externalVotingCtrl = require('../controllers/externalVoting.controller');
 
 // Wrap multer.any() for rekomendasi-style uploads
 const handleUploadAny = (req, res, next) => {
@@ -232,9 +231,9 @@ router.delete('/rekomendasi/:id', requirePermission('rekomendasi:delete'), rekom
 router.put('/pengcab-panel/:pengcabId/rekomendasi/:id/approve', requirePermission('rekomendasi:write'), rekomendasiCtrl.approveByPengcabExternal);
 router.put('/pengcab-panel/:pengcabId/rekomendasi/:id/reject', requirePermission('rekomendasi:write'), rekomendasiCtrl.rejectByPengcabExternal);
 
-// E-voting approval and revenue share from FORBASI Pusat
-router.get('/voting/events', requirePermission('voting:read'), externalVotingCtrl.listEvents);
-router.patch('/voting/events/:eventId/approval', requirePermission('voting:write'), externalVotingCtrl.updateApproval);
+// E-voting & e-ticketing sengaja TIDAK dibuka ke API eksternal: persetujuan dan
+// bagi hasilnya diputuskan super admin Jabar sendiri (lihat voting.routes.js &
+// ticket.routes.js), bukan oleh FORBASI Pusat.
 
 // ══════════════════════════════════════════
 // KEJURDA / EVENT

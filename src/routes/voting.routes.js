@@ -35,6 +35,7 @@ const {
 // saldo yang membatasi pencairan di sini dan panel rincian /api/saldo memakai
 // angka yang sama persis — bukan dua hitungan mirip yang selisih pembulatan.
 const { computeSharePools, carveDeveloperShare } = require('../lib/revenueShare');
+const externalVotingCtrl = require('../controllers/externalVoting.controller');
 
 const optionalAuthenticate = (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -854,7 +855,7 @@ router.post('/admin/events', authenticate, canManageVoting, upload.single('poste
     });
 
     res.status(201).json({
-      message: 'Vote berhasil dibuat dan diajukan ke FORBASI Pusat',
+      message: 'Vote berhasil dibuat dan diajukan ke super admin',
       event: normalizeEvent(event),
     });
   } catch (error) {
@@ -954,10 +955,11 @@ router.patch('/admin/events/:eventId/title', authenticate, canManageVoting, asyn
 
 router.get('/admin/events', authenticate, canManageVoting, async (req, res) => {
   try {
-    // Super admin only manages votes already approved by FORBASI Pusat; the owning
-    // penyelenggara still sees all of theirs (including pending) to configure them.
+    // Persetujuan vote kini diputuskan super admin sendiri, jadi admin melihat
+    // seluruh pengajuan — termasuk yang masih menunggu atau ditolak — bukan hanya
+    // yang sudah disetujui. Penyelenggara tetap hanya melihat miliknya.
     const where = isAdminRole(req.user.role)
-      ? { votingConfig: { is: { approvalStatus: 'APPROVED' } } }
+      ? { votingConfig: { isNot: null } }
       : { userId: req.user.id, votingConfig: { isNot: null } };
     const events = await prisma.rekomendasiEvent.findMany({
       where,
@@ -1294,7 +1296,7 @@ router.put('/admin/event/:eventId/config', authenticate, canManageVoting, async 
     });
     if (req.body.enabled && existingConfig?.approvalStatus !== 'APPROVED') {
       return res.status(400).json({
-        error: 'E-voting belum disetujui FORBASI Pusat. Voting belum dapat diaktifkan.',
+        error: 'E-voting belum disetujui super admin. Voting belum dapat diaktifkan.',
       });
     }
 
@@ -1329,6 +1331,14 @@ router.put('/admin/event/:eventId/config', authenticate, canManageVoting, async 
     res.status(500).json({ error: 'Gagal menyimpan konfigurasi voting', detail: error.message });
   }
 });
+
+// Persetujuan vote & bagi hasil — hanya oleh super admin, tidak lagi lewat
+// FORBASI Pusat. Aturannya: total 100%, status event ikut DISETUJUI/DITOLAK,
+// dan penolakan/penundaan mematikan voting.
+router.patch('/admin/event/:eventId/approval', authenticate, (req, res, next) => {
+  if (isSuperRole(req.user?.role)) return next();
+  return res.status(403).json({ error: 'Hanya super admin yang dapat menyetujui vote' });
+}, externalVotingCtrl.updateApproval);
 
 router.patch('/admin/event/:eventId/developer-share', authenticate, canManageVoting, async (req, res) => {
   try {
