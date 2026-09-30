@@ -9,6 +9,7 @@
 // pesanan dibuat (bukan saat dibayar), dan setiap pembatalan wajib melepas dua
 // hitungan sekaligus — kuota acara dan kuota jenis tiket.
 const router = require('express').Router();
+const { Prisma } = require('@prisma/client');
 const prisma = require('../lib/prisma');
 const { authenticate } = require('../middleware/auth.middleware');
 const { isAdminLikeRole, isSuperRole } = require('../lib/roles');
@@ -709,17 +710,65 @@ router.get('/admin/events', async (req, res) => {
       },
     });
 
-    res.json(events.map((event) => ({
-      id: event.id,
-      namaEvent: event.namaEvent,
-      lokasi: event.lokasi,
-      status: event.status,
-      poster: event.ticketConfig?.poster || event.poster,
-      penyelenggara: event.user?.name || event.penyelenggara || null,
-      tanggalMulai: event.tanggalMulai,
-      tanggalSelesai: event.tanggalSelesai,
-      ticketConfig: normalizeConfig(event.ticketConfig),
-    })));
+    // Angka ringkas per event untuk halaman ringkasan: tiga agregat sekali jalan,
+    // bukan satu query per event, supaya daftar tetap ringan walau event banyak.
+    const eventIds = events.map((event) => event.id);
+    const [earned, pending, checkedIn] = eventIds.length === 0 ? [[], [], []] : await Promise.all([
+      prisma.ticketOrder.groupBy({
+        by: ['rekomendasiEventId'],
+        where: { rekomendasiEventId: { in: eventIds }, status: { in: ['PAID', 'USED'] } },
+        _sum: { quantity: true, totalAmount: true, organizerShareAmount: true, pengdaShareAmount: true },
+        _count: true,
+      }),
+      prisma.ticketOrder.groupBy({
+        by: ['rekomendasiEventId'],
+        where: { rekomendasiEventId: { in: eventIds }, status: 'PENDING' },
+        _count: true,
+      }),
+      prisma.$queryRaw`
+        SELECT o.rekomendasi_event_id AS eventId, COUNT(*) AS total
+        FROM ticket_attendees a
+        JOIN ticket_orders o ON o.id = a.order_id
+        WHERE a.status = 'USED' AND o.rekomendasi_event_id IN (${Prisma.join(eventIds)})
+        GROUP BY o.rekomendasi_event_id`,
+    ]);
+    const earnedMap = new Map(earned.map((row) => [row.rekomendasiEventId, row]));
+    const pendingMap = new Map(pending.map((row) => [row.rekomendasiEventId, row._count]));
+    const checkedInMap = new Map(checkedIn.map((row) => [Number(row.eventId), Number(row.total) || 0]));
+
+    res.json(events.map((event) => {
+      const row = earnedMap.get(event.id);
+      const grossRevenue = decimalToNumber(row?._sum.totalAmount);
+      const pengdaShare = decimalToNumber(row?._sum.pengdaShareAmount);
+      const split = splitPengdaDeveloper(
+        grossRevenue,
+        pengdaShare,
+        event.ticketConfig ? decimalToNumber(event.ticketConfig.developerSharePercent) : 0
+      );
+      return {
+        id: event.id,
+        namaEvent: event.namaEvent,
+        lokasi: event.lokasi,
+        status: event.status,
+        poster: event.ticketConfig?.poster || event.poster,
+        penyelenggara: event.user?.name || event.penyelenggara || null,
+        tanggalMulai: event.tanggalMulai,
+        tanggalSelesai: event.tanggalSelesai,
+        ticketConfig: normalizeConfig(event.ticketConfig),
+        stats: {
+          paidOrders: row?._count || 0,
+          soldTickets: row?._sum.quantity || 0,
+          grossRevenue,
+          organizerShare: decimalToNumber(row?._sum.organizerShareAmount),
+          pengdaShare,
+          pengdaNetShare: split.pengdaNetShare,
+          developerShare: split.developerShare,
+          pendingOrders: pendingMap.get(event.id) || 0,
+          checkedIn: checkedInMap.get(event.id) || 0,
+          totalOrders: event.ticketConfig?._count?.orders || 0,
+        },
+      };
+    }));
   } catch (error) {
     res.status(500).json({ error: 'Gagal memuat event tiket', detail: error.message });
   }
@@ -1427,7 +1476,7 @@ router.get('/admin/event/:eventId/dashboard', async (req, res) => {
     }
 
     const config = await getOrCreateConfig(eventId);
-    const [byStatus, paidTotals, attendeeStatus, byType, daily] = await Promise.all([
+    const [byStatus, paidTotals, attendeeStatus, byType, daily, byChannel, recentScans] = await Promise.all([
       prisma.ticketOrder.groupBy({
         by: ['status'],
         where: { rekomendasiEventId: eventId },
@@ -1467,6 +1516,25 @@ router.get('/admin/event/:eventId/dashboard', async (req, res) => {
         GROUP BY period
         ORDER BY period DESC
         LIMIT 30`,
+      prisma.ticketOrder.groupBy({
+        by: ['channel'],
+        where: { rekomendasiEventId: eventId, status: { in: ['PAID', 'USED'] } },
+        _sum: { quantity: true, totalAmount: true },
+        _count: true,
+      }),
+      // Penonton terakhir yang masuk gerbang — panitia memantau arus dari sini.
+      prisma.ticketAttendee.findMany({
+        where: { status: 'USED', order: { rekomendasiEventId: eventId } },
+        orderBy: { usedAt: 'desc' },
+        take: 8,
+        select: {
+          id: true,
+          name: true,
+          ticketCode: true,
+          usedAt: true,
+          order: { select: { orderCode: true, ticketType: { select: { name: true } } } },
+        },
+      }),
     ]);
 
     const statusMap = Object.fromEntries(byStatus.map((row) => [row.status, row]));
@@ -1517,6 +1585,20 @@ router.get('/admin/event/:eventId/dashboard', async (req, res) => {
         tickets: Number(row.tickets) || 0,
         revenue: decimalToNumber(row.revenue),
       })).reverse(),
+      byChannel: byChannel.map((row) => ({
+        channel: row.channel,
+        orders: row._count,
+        tickets: row._sum.quantity || 0,
+        revenue: decimalToNumber(row._sum.totalAmount),
+      })),
+      recentScans: recentScans.map((row) => ({
+        id: row.id,
+        name: row.name,
+        ticketCode: row.ticketCode,
+        usedAt: row.usedAt,
+        orderCode: row.order?.orderCode,
+        ticketTypeName: row.order?.ticketType?.name || 'Tiket Masuk',
+      })),
     });
   } catch (error) {
     res.status(500).json({ error: 'Gagal memuat dasbor tiket', detail: error.message });
@@ -1661,6 +1743,103 @@ router.patch('/admin/orders/:orderId', async (req, res) => {
     return res.status(400).json({ error: 'Aksi harus USED atau CANCELLED' });
   } catch (error) {
     res.status(500).json({ error: 'Gagal memperbarui pesanan', detail: error.message });
+  }
+});
+
+// Check-in manual satu penonton, atau membatalkan check-in yang salah pindai.
+// Berbeda dari gerbang: tanggal berlaku tiket harian tidak diperiksa, karena ini
+// koreksi panitia, bukan pemindaian penonton yang datang.
+router.patch('/admin/attendees/:attendeeId', async (req, res) => {
+  try {
+    const attendeeId = toId(req.params.attendeeId);
+    if (!attendeeId) return res.status(400).json({ error: 'ID penonton tidak valid' });
+
+    const attendee = await prisma.ticketAttendee.findUnique({
+      where: { id: attendeeId },
+      include: { order: { select: { id: true, status: true, rekomendasiEventId: true } } },
+    });
+    if (!attendee) return res.status(404).json({ error: 'Penonton tidak ditemukan' });
+    if (!(await verifyEventOwnership(req, attendee.order.rekomendasiEventId))) {
+      return res.status(403).json({ error: 'Tidak memiliki akses ke event ini' });
+    }
+
+    const action = String(req.body.action || '').toUpperCase();
+
+    if (action === 'CHECKIN') {
+      // Compare-and-swap yang sama dengan gerbang: bila tiketnya baru saja
+      // dipindai di gerbang lain, koreksi manual ini kalah dan tidak menimpa.
+      const claimed = await prisma.ticketAttendee.updateMany({
+        where: { id: attendee.id, status: 'PAID' },
+        data: { status: 'USED', usedAt: new Date(), scannedById: req.user.id },
+      });
+      if (claimed.count === 0) {
+        return res.status(400).json({ error: 'Hanya tiket lunas yang belum dipakai yang bisa di-check-in' });
+      }
+      const remainingPaid = await prisma.ticketAttendee.count({
+        where: { orderId: attendee.order.id, status: 'PAID' },
+      });
+      if (remainingPaid === 0) {
+        await prisma.ticketOrder.updateMany({
+          where: { id: attendee.order.id, status: 'PAID' },
+          data: { status: 'USED' },
+        });
+      }
+      return res.json({ message: `${attendee.name} ditandai sudah masuk` });
+    }
+
+    if (action === 'UNDO') {
+      if (attendee.status !== 'USED') {
+        return res.status(400).json({ error: 'Penonton ini belum di-check-in' });
+      }
+      await prisma.$transaction(async (tx) => {
+        await tx.ticketAttendee.update({
+          where: { id: attendee.id },
+          data: { status: 'PAID', usedAt: null, scannedById: null },
+        });
+        // Pesanan yang sempat ditutup USED dibuka lagi karena ada tiketnya yang
+        // kembali belum terpakai.
+        await tx.ticketOrder.updateMany({
+          where: { id: attendee.order.id, status: 'USED' },
+          data: { status: 'PAID' },
+        });
+      });
+      return res.json({ message: `Check-in ${attendee.name} dibatalkan` });
+    }
+
+    return res.status(400).json({ error: 'Aksi harus CHECKIN atau UNDO' });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal memperbarui status penonton', detail: error.message });
+  }
+});
+
+// Seluruh pesanan satu event beserta penontonnya, untuk diunduh sebagai Excel.
+// Dibatasi agar satu permintaan tidak menarik data tanpa ujung.
+const EXPORT_LIMIT = 20000;
+router.get('/admin/event/:eventId/export', async (req, res) => {
+  try {
+    const eventId = toId(req.params.eventId);
+    if (!eventId) return res.status(400).json({ error: 'ID event tidak valid' });
+    if (!(await verifyEventOwnership(req, eventId))) {
+      return res.status(403).json({ error: 'Tidak memiliki akses ke event ini' });
+    }
+
+    const status = String(req.query.status || '').toUpperCase();
+    const where = { rekomendasiEventId: eventId };
+    if (ORDER_STATUSES.includes(status)) where.status = status;
+
+    const orders = await prisma.ticketOrder.findMany({
+      where,
+      orderBy: { createdAt: 'asc' },
+      take: EXPORT_LIMIT,
+      include: {
+        attendees: { orderBy: { id: 'asc' } },
+        ticketType: { select: { id: true, name: true, kind: true, validDate: true } },
+      },
+    });
+
+    res.json({ data: orders.map(normalizeOrder), truncated: orders.length >= EXPORT_LIMIT });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal menyiapkan ekspor tiket', detail: error.message });
   }
 });
 
