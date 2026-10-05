@@ -1,5 +1,5 @@
 const router = require('express').Router();
-const { getAll, getById, create, update, updateStatus, remove, regenerateSurat } = require('../controllers/rekomendasi.controller');
+const { getAll, getById, create, update, updateJadwal, updateStatus, remove, regenerateSurat } = require('../controllers/rekomendasi.controller');
 const { authenticate, isAdmin, isPengcab } = require('../middleware/auth.middleware');
 
 // Middleware: allow ADMIN or PENGCAB
@@ -27,6 +27,9 @@ router.get('/', authenticate, getAll);
 router.get('/:id', authenticate, getById);
 router.post('/', authenticate, handleUpload, create);
 router.put('/:id', authenticate, handleUpload, update);
+// Tanggal pelaksanaan saja — tidak menyentuh status persetujuan, jadi tidak
+// lewat `update` yang mengembalikan event ke PENDING.
+router.patch('/:id/jadwal', authenticate, updateJadwal);
 router.patch('/:id/status', authenticate, isAdminOrPengcab, updateStatus);
 router.post('/:id/regenerate-surat', authenticate, isAdmin, regenerateSurat);
 router.delete('/:id', authenticate, remove);

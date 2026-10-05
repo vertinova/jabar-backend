@@ -1,6 +1,7 @@
 const prisma = require('../lib/prisma');
 const { generateSuratRekomendasi } = require('../lib/suratGenerator');
 const { skipsPengcabApproval, pengcabSkipMessage } = require('../lib/approvalFlow');
+const { isAdminLikeRole } = require('../lib/roles');
 const fs = require('fs');
 const path = require('path');
 
@@ -314,6 +315,93 @@ const update = async (req, res) => {
   }
 };
 
+// Menggeser TANGGAL PELAKSANAAN tanpa pengajuan ulang.
+//
+// `update` di atas menolak event yang sudah DISETUJUI dan mengembalikan status
+// ke PENDING, dan untuk isi rekomendasi lainnya itu benar: dokumen, mata lomba,
+// dan proposal adalah berkas perizinan yang memang harus dinilai ulang kalau
+// berubah. Tanggal tidak termasuk — acara yang diundur tidak membuat izinnya
+// gugur, sementara tanggal itulah yang tercetak di e-ticket penonton dan yang
+// dipakai pemindai di gerbang. Memaksa persetujuan ulang hanya untuk menggeser
+// hari berarti seluruh tiket yang sudah terjual menunggu panitia lain, padahal
+// tanggal di tangan penontonnya sudah telanjur salah.
+//
+// Yang berubah hanya dua kolom ini. Status, catatan, dan jejak persetujuan
+// sengaja tidak disentuh.
+const parseTanggalAcara = (value) => {
+  if (!value) return null;
+  const date = new Date(String(value).trim());
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const MAX_DURASI_HARI = 60;
+
+const updateJadwal = async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (!id) return res.status(400).json({ error: 'ID event tidak valid' });
+
+    const existing = await prisma.rekomendasiEvent.findUnique({
+      where: { id },
+      select: { id: true, userId: true, namaEvent: true, tanggalMulai: true, tanggalSelesai: true },
+    });
+    if (!existing) return res.status(404).json({ error: 'Event tidak ditemukan' });
+
+    // Pemilik event, atau peran yang memang mengelola event orang lain.
+    if (!isAdminLikeRole(req.user.role) && existing.userId !== req.user.id) {
+      return res.status(403).json({ error: 'Akses ditolak' });
+    }
+
+    const tanggalMulai = parseTanggalAcara(req.body.tanggalMulai);
+    if (!tanggalMulai) return res.status(400).json({ error: 'Tanggal mulai wajib diisi' });
+
+    // Acara sehari cukup mengisi tanggal mulai.
+    const tanggalSelesai = parseTanggalAcara(req.body.tanggalSelesai) || tanggalMulai;
+    if (tanggalSelesai < tanggalMulai) {
+      return res.status(400).json({ error: 'Tanggal selesai tidak boleh mendahului tanggal mulai' });
+    }
+
+    // Batas yang sama dengan MAX_EVENT_DAYS di modul tiket: di atas itu daftar
+    // hari berlakunya terpotong diam-diam dan pemindai menolak hari sisanya.
+    const durasiHari = Math.round((tanggalSelesai - tanggalMulai) / 86400000) + 1;
+    if (durasiHari > MAX_DURASI_HARI) {
+      return res.status(400).json({
+        error: `Rentang acara terlalu panjang (${durasiHari} hari). Maksimal ${MAX_DURASI_HARI} hari.`,
+      });
+    }
+
+    const event = await prisma.rekomendasiEvent.update({
+      where: { id },
+      data: { tanggalMulai, tanggalSelesai },
+      include: {
+        user: { select: { id: true, name: true } },
+        pengcab: { select: { id: true, nama: true } },
+      },
+    });
+
+    // Tiket harian menyimpan tanggalnya sendiri, jadi tidak ikut bergeser. Yang
+    // jatuh di luar jadwal baru akan ditolak pemindai, karena itu jumlahnya
+    // dikembalikan supaya panel bisa menyebutnya alih-alih membiarkan panitia
+    // menemukannya di gerbang.
+    const tiketHarianDiLuarJadwal = await prisma.ticketType.count({
+      where: {
+        isActive: true,
+        kind: 'DAY',
+        config: { rekomendasiEventId: id },
+        OR: [{ validDate: { lt: tanggalMulai } }, { validDate: { gt: tanggalSelesai } }],
+      },
+    });
+
+    res.json({
+      message: 'Tanggal acara diperbarui. Status persetujuan tidak berubah.',
+      event,
+      tiketHarianDiLuarJadwal,
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal memperbarui tanggal acara', detail: error.message });
+  }
+};
+
 const uploadPoster = async (req, res) => {
   try {
     const id = parseInt(req.params.id);
@@ -593,6 +681,7 @@ module.exports = {
   getById,
   create,
   update,
+  updateJadwal,
   uploadPoster,
   updateStatus,
   approveByPengcabExternal,
