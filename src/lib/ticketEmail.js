@@ -93,7 +93,7 @@ const buildTicketEmailHtml = ({ event, config, order, attendees, hasPoster = fal
   // tidak menjanjikan hari yang nanti ditolak pemindai.
   const validity = validityLabel(order.ticketType, event);
   const validDate = validity
-    ? `<p style="margin:8px 0 0;font-size:12px;font-weight:600;color:#b45309;">Berlaku masuk: ${escapeHtml(validity)}.</p>`
+    ? `<p style="margin:8px 0 0;font-size:12px;font-weight:600;color:#b45309;">Dapat digunakan: ${escapeHtml(validity)}.</p>`
     : '';
 
   // Banner hanya dipasang bila lampirannya benar-benar jadi; kalau tidak, kepala

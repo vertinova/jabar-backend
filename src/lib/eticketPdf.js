@@ -143,7 +143,7 @@ const drawTicket = (doc, data, ticket, number, total, qr, banner, top) => {
   const details = [
     // Kupon inilah yang ditunjukkan di gerbang: tiket Hari 2 harus menyebut
     // Hari 2, bukan tanggal pembukaan acara.
-    ['BERLAKU MASUK', data.validity || formatDate(data.eventDate)],
+    ['DAPAT DIGUNAKAN', data.validity || formatDate(data.eventDate)],
     ['LOKASI', data.venue || '-'],
     ['JENIS TIKET', data.ticketTypeName || 'Tiket Masuk'],
     ['PEMBELI', data.buyerName],
@@ -220,7 +220,7 @@ const drawCover = (doc, data, banner) => {
     ['TOTAL', formatRupiah(data.totalAmount)],
     ['JENIS TIKET', data.ticketTypeName || 'Tiket Masuk'],
   ];
-  if (data.validity) summary.push(['BERLAKU MASUK', data.validity]);
+  if (data.validity) summary.push(['DAPAT DIGUNAKAN', data.validity]);
   summary.forEach(([key, value], index) => {
     const bx = MARGIN + (index % 2) * (boxWidth + 12);
     const by = y + Math.floor(index / 2) * 60;
