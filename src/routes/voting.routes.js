@@ -519,8 +519,11 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
     const normalizedSupportMessage = String(supportMessage || '').trim().slice(0, 200) || null;
     const providedBuyerEmail = String(buyerEmail || req.user?.email || '').trim().toLowerCase();
 
-    if (!eventId || !normalizedBuyerName || !normalizedBuyerPhone) {
-      return res.status(400).json({ error: 'Event, nama, dan nomor telepon pembeli wajib diisi' });
+    /* Nomor telepon tidak lagi diminta: membeli vote tidak menuntut nomor
+       pribadi, dan kolomnya sudah dilepas dari formulir. Yang dikirim tetap
+       disimpan kalau ada — pesanan lama dan panel rekap masih memakainya. */
+    if (!eventId || !normalizedBuyerName) {
+      return res.status(400).json({ error: 'Event dan nama pembeli wajib diisi' });
     }
 
     if (!Number.isInteger(voteCount) || voteCount < 1) {
@@ -593,7 +596,11 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
           rekomendasiEventId: eventId,
           buyerName: normalizedBuyerName,
           buyerEmail: resolvedBuyerEmail,
-          buyerPhone: normalizedBuyerPhone,
+          /* Kosong disimpan sebagai null, bukan string kosong: kolomnya
+             nullable, dan "" menyamarkan ketiadaan nomor sebagai nomor
+             kosong. Yang dikirim ke Midtrans tetap string, karena di sana
+             null bukan nilai yang diharapkan. */
+          buyerPhone: normalizedBuyerPhone || null,
           supportMessage: normalizedSupportMessage,
           categoryId: votingTarget.category.id,
           nomineeId: votingTarget.nominee.id,
