@@ -23,6 +23,7 @@ const {
   finalizeVotingPurchaseSuccess,
   VOTING_ADMIN_FEE_PER_VOTE,
   VOTING_MAX_ADMIN_FEE,
+  tarifAdminVoting,
 } = require('../lib/votingPayment');
 const { ADMIN_FEE_ROLES, isAdminLikeRole, isSuperRole } = require('../lib/roles');
 // Penjualan tiket masuk ke dompet & pencairan yang sama dengan vote: penyelenggara
@@ -556,7 +557,10 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
 
     const pricePerVote = decimalToNumber(config.pricePerVote);
     const totalAmount = pricePerVote * voteCount;
-    const adminFee = calculateVotingAdminFee(totalAmount, voteCount);
+    /* Tarif dibekukan ke baris pembelian di bawah, jadi mengubahnya nanti
+       tidak menyentuh transaksi yang sudah berjalan. */
+    const tarifAdmin = tarifAdminVoting(config);
+    const adminFee = calculateVotingAdminFee(totalAmount, voteCount, tarifAdmin);
     const { grossAmount: paymentAmount, fee: qrisFeeEstimate } = calculateQrisFee(totalAmount + adminFee);
     const revenueSplit = calculateVotingRevenueSplit(
       totalAmount,
@@ -566,7 +570,7 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
 
     if (paymentAmount > QRIS_MAX_TRANSACTION) {
       const affordableVotes = pricePerVote > 0
-        ? Math.max(1, Math.floor((QRIS_MAX_TRANSACTION * 0.99 - calculateVotingAdminFee(QRIS_MAX_TRANSACTION, voteCount)) / pricePerVote))
+        ? Math.max(1, Math.floor((QRIS_MAX_TRANSACTION * 0.99 - calculateVotingAdminFee(QRIS_MAX_TRANSACTION, voteCount, tarifAdmin)) / pricePerVote))
         : 1;
       return res.status(400).json({
         error: `Total harga vote, biaya admin, dan biaya QRIS tidak boleh melebihi Rp ${QRIS_MAX_TRANSACTION.toLocaleString('id-ID')} per transaksi.`,
@@ -1340,6 +1344,60 @@ router.patch('/admin/event/:eventId/approval', authenticate, (req, res, next) =>
   if (isSuperRole(req.user?.role)) return next();
   return res.status(403).json({ error: 'Hanya super admin yang dapat menyetujui vote' });
 }, externalVotingCtrl.updateApproval);
+
+/* Tarif biaya admin khusus satu event, hanya super admin.
+ *
+ * Dikosongkan berarti kembali mengikuti tarif bawaan aplikasi — berbeda dari
+ * menyetelnya ke angka yang kebetulan sama, karena event yang mengikuti bawaan
+ * ikut berubah saat bawaannya diubah.
+ *
+ * Tarif yang berlaku dibekukan ke tiap baris pembelian saat checkout dibuat,
+ * jadi mengubahnya di sini tidak pernah menyentuh transaksi yang sudah jalan.
+ */
+router.patch('/admin/event/:eventId/admin-fee', authenticate, async (req, res) => {
+  try {
+    if (!isSuperRole(req.user?.role)) {
+      return res.status(403).json({ error: 'Hanya super admin yang dapat mengatur biaya admin' });
+    }
+
+    const eventId = toId(req.params.eventId);
+    if (!eventId) return res.status(400).json({ error: 'ID event tidak valid' });
+
+    const existing = await prisma.eventVotingConfig.findUnique({
+      where: { rekomendasiEventId: eventId },
+      select: { id: true },
+    });
+    if (!existing) return res.status(404).json({ error: 'Konfigurasi voting tidak ditemukan' });
+
+    /* Kosong/null = ikut bawaan. Selain itu wajib bilangan bulat tak negatif. */
+    const bacaTarif = (nilai, label) => {
+      if (nilai === null || nilai === undefined || nilai === '') return { nilai: null };
+      const n = Number(nilai);
+      if (!Number.isFinite(n) || n < 0) return { pesan: `${label} harus angka nol atau lebih.` };
+      if (n > 1000000) return { pesan: `${label} tidak masuk akal sebesar itu.` };
+      return { nilai: Math.round(n) };
+    };
+
+    const perVote = bacaTarif(req.body?.adminFeePerVote, 'Biaya admin per vote');
+    if (perVote.pesan) return res.status(400).json({ error: perVote.pesan });
+    const maksimum = bacaTarif(req.body?.adminFeeMax, 'Batas biaya admin');
+    if (maksimum.pesan) return res.status(400).json({ error: maksimum.pesan });
+
+    if (perVote.nilai !== null && maksimum.nilai !== null && maksimum.nilai < perVote.nilai) {
+      return res.status(400).json({ error: 'Batas biaya admin tidak boleh lebih kecil dari biaya per vote.' });
+    }
+
+    const config = await prisma.eventVotingConfig.update({
+      where: { rekomendasiEventId: eventId },
+      data: { adminFeePerVote: perVote.nilai, adminFeeMax: maksimum.nilai },
+      include: includeConfig,
+    });
+
+    res.json(normalizeVotingConfig(config));
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal menyimpan biaya admin', detail: error.message });
+  }
+});
 
 /* Saklar izin sinkronisasi FORBASI, hanya super admin.
  *

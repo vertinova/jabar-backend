@@ -3,11 +3,27 @@ const { invalidateEventVotersSafe } = require('./votersFeed');
 const VOTING_ADMIN_FEE_PER_VOTE = 500;
 const VOTING_MAX_ADMIN_FEE = 10000;
 
-const calculateVotingAdminFee = (totalAmount, voteCount) => {
+/* Tarif yang berlaku untuk satu event. Kolom NULL berarti "ikut tarif bawaan",
+   jadi event yang tidak pernah diatur sendiri tetap ikut saat bawaannya diubah. */
+const angkaTarif = (nilai, bawaan) => {
+  const n = Number(nilai);
+  return nilai === null || nilai === undefined || !Number.isFinite(n) || n < 0 ? bawaan : Math.round(n);
+};
+
+const tarifAdminVoting = (config) => ({
+  perVote: angkaTarif(config?.adminFeePerVote, VOTING_ADMIN_FEE_PER_VOTE),
+  maksimum: angkaTarif(config?.adminFeeMax, VOTING_MAX_ADMIN_FEE),
+});
+
+/* `tarif` opsional supaya pemanggil lama tetap sah; tanpa itu dipakai tarif
+   bawaan, persis seperti sebelum tarif per event ada. */
+const calculateVotingAdminFee = (totalAmount, voteCount, tarif) => {
   const amount = Number(totalAmount) || 0;
   const votes = Number.parseInt(voteCount, 10) || 0;
   if (amount <= 0 || votes <= 0) return 0;
-  return Math.min(VOTING_ADMIN_FEE_PER_VOTE * votes, VOTING_MAX_ADMIN_FEE);
+  const perVote = angkaTarif(tarif?.perVote, VOTING_ADMIN_FEE_PER_VOTE);
+  const maksimum = angkaTarif(tarif?.maksimum, VOTING_MAX_ADMIN_FEE);
+  return Math.min(perVote * votes, maksimum);
 };
 
 const calculateVotingRevenueSplit = (totalAmount, organizerSharePercent, pengdaSharePercent) => {
@@ -139,6 +155,7 @@ const finalizeVotingPurchaseSuccess = async (db, purchaseId, { paymentType = nul
 module.exports = {
   VOTING_ADMIN_FEE_PER_VOTE,
   VOTING_MAX_ADMIN_FEE,
+  tarifAdminVoting,
   calculateVotingAdminFee,
   calculateVotingRevenueSplit,
   applyPaidVotingPurchaseVotes,

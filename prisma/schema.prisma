@@ -196,6 +196,11 @@ model EventVotingConfig {
   // event: akses ke data pusat bukan sesuatu yang layak menyala hanya karena
   // sebuah event voting dibuka.
   sinkronForbasiAktif   Boolean              @default(false) @map("sinkron_forbasi_aktif")
+  // Tarif biaya admin khusus event ini. NULL berarti ikut tarif bawaan —
+  // dibedakan dari angka yang kebetulan disetel sama, supaya mengubah tarif
+  // bawaan tetap menyentuh event yang tidak pernah diatur sendiri.
+  adminFeePerVote       Int?                 @map("admin_fee_per_vote")
+  adminFeeMax           Int?                 @map("admin_fee_max")
   approvalNote          String?              @map("approval_note") @db.Text
   approvedAt            DateTime?            @map("approved_at")
   startDate             DateTime?            @map("start_date")
