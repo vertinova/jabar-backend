@@ -147,30 +147,50 @@ const buildEventVoters = async (eventId, isPaid) => {
   let voters;
 
   if (isPaid) {
-    // Voting berbayar: satu voter = satu nomor HP pembeli (bisa punya banyak
-    // pembelian). Pesan & nama diambil dari pembelian terbaru orang tersebut.
+    /* Voting berbayar: satu voter = satu pembeli (bisa punya banyak pembelian).
+       Pesan & nama diambil dari pembelian terbaru orang tersebut.
+
+       Pembeli dikenali dari identitas terbaik yang ia tinggalkan — nomor HP,
+       lalu email, lalu nama. Dulu nomor HP-lah syaratnya, dan pembelian tanpa
+       nomor tersingkir sama sekali dari daftar ini. Itu menjadi masalah nyata
+       begitu kolom nomor telepon dilepas dari formulir: pembeli menulis pesan
+       semangat, membayar, lalu pesannya tidak pernah lewat di teks berjalan.
+
+       Yang sama sekali tidak meninggalkan identitas tetap tampil, dihitung per
+       pembelian — lebih baik satu orang terbaca sebagai dua baris daripada
+       pesannya hilang. */
     const [groups, purchases] = await Promise.all([
       prisma.votingVote.groupBy({
         by: ['purchaseId', 'categoryId', 'nomineeId'],
         where: {
           categoryId: { in: categoryIds },
-          purchase: { is: { status: 'PAID', buyerPhone: { not: null } } },
+          purchase: { is: { status: 'PAID' } },
         },
         _count: { _all: true },
         _max: { createdAt: true },
       }),
       prisma.votingPurchase.findMany({
-        where: { rekomendasiEventId: eventId, status: 'PAID', buyerPhone: { not: null } },
-        select: { id: true, buyerPhone: true, buyerName: true, supportMessage: true, createdAt: true },
+        where: { rekomendasiEventId: eventId, status: 'PAID' },
+        select: {
+          id: true, buyerPhone: true, buyerEmail: true, buyerName: true,
+          supportMessage: true, createdAt: true,
+        },
       }),
     ]);
 
     const purchaseById = new Map(purchases.map((purchase) => [purchase.id, purchase]));
+    const kenaliPembeli = (group) => {
+      const p = purchaseById.get(group.purchaseId);
+      return voterKey(p?.buyerPhone)
+        || voterKey(p?.buyerEmail)
+        || voterKey(p?.buyerName)
+        || `pembelian-${group.purchaseId}`;
+    };
 
     voters = foldGroups(groups, {
       categoryTitle,
       nomineeName,
-      keyOf: (group) => voterKey(purchaseById.get(group.purchaseId)?.buyerPhone),
+      keyOf: kenaliPembeli,
       enrich: (voter, group) => {
         const purchase = purchaseById.get(group.purchaseId);
         if (!purchase) return;
