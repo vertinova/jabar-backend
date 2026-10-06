@@ -6,6 +6,7 @@ const prisma = require('../lib/prisma');
 const upload = require('../middleware/upload.middleware');
 const { authenticate } = require('../middleware/auth.middleware');
 const { getEventVoters, invalidateEventVotersSafe, VOTERS_LIMIT } = require('../lib/votersFeed');
+const { fetchKejurdaKlub, isForbasiConfigured } = require('../lib/forbasi');
 const {
   calculateQrisFee,
   createSnapTransaction,
@@ -1340,6 +1341,39 @@ router.patch('/admin/event/:eventId/approval', authenticate, (req, res, next) =>
   return res.status(403).json({ error: 'Hanya super admin yang dapat menyetujui vote' });
 }, externalVotingCtrl.updateApproval);
 
+/* Saklar izin sinkronisasi FORBASI, hanya super admin.
+ *
+ * Dipisahkan dari `enabled` (yang menyalakan voting-nya) karena yang diatur di
+ * sini bukan jalannya voting, melainkan akses ke data peserta di server pusat —
+ * dan itu tidak selayaknya ikut menyala hanya karena sebuah event dibuka. */
+router.patch('/admin/event/:eventId/sinkron-forbasi', authenticate, async (req, res) => {
+  try {
+    if (!isSuperRole(req.user?.role)) {
+      return res.status(403).json({ error: 'Hanya super admin yang dapat mengatur akses sinkronisasi FORBASI' });
+    }
+
+    const eventId = toId(req.params.eventId);
+    if (!eventId) return res.status(400).json({ error: 'ID event tidak valid' });
+
+    const existing = await prisma.eventVotingConfig.findUnique({
+      where: { rekomendasiEventId: eventId },
+      select: { id: true },
+    });
+    if (!existing) return res.status(404).json({ error: 'Konfigurasi voting tidak ditemukan' });
+
+    const aktif = req.body?.sinkronForbasiAktif === true || req.body?.sinkronForbasiAktif === 'true';
+    const config = await prisma.eventVotingConfig.update({
+      where: { rekomendasiEventId: eventId },
+      data: { sinkronForbasiAktif: aktif },
+      include: includeConfig,
+    });
+
+    res.json(normalizeVotingConfig(config));
+  } catch (error) {
+    res.status(500).json({ error: 'Gagal menyimpan akses sinkronisasi FORBASI', detail: error.message });
+  }
+});
+
 router.patch('/admin/event/:eventId/developer-share', authenticate, canManageVoting, async (req, res) => {
   try {
     if (!isSuperRole(req.user?.role)) {
@@ -1479,6 +1513,133 @@ router.post('/admin/categories/:categoryId/nominees', authenticate, canManageVot
     res.status(201).json(nominee);
   } catch (error) {
     res.status(500).json({ error: 'Gagal menambah nominee', detail: error.message });
+  }
+});
+
+/* Penjaga bersama dua endpoint di bawah: event ini memang diizinkan menarik
+   data dari FORBASI pusat. Izinnya dipegang super admin per event — tanpa itu
+   setiap penyelenggara voting bisa memanen daftar klub pusat sesukanya. */
+async function pastikanBolehSinkron(req, res, categoryId) {
+  if (!categoryId) { res.status(400).json({ error: 'ID kategori tidak valid' }); return null; }
+  const eventId = await getEventIdForCategory(categoryId);
+  if (!eventId) { res.status(404).json({ error: 'Kategori tidak ditemukan' }); return null; }
+  if (!(await verifyEventOwnership(req, eventId))) {
+    res.status(403).json({ error: 'Tidak memiliki akses ke kategori ini' });
+    return null;
+  }
+  if (!isForbasiConfigured()) {
+    res.status(503).json({ error: 'Integrasi FORBASI belum aktif di server ini.' });
+    return null;
+  }
+  const config = await prisma.eventVotingConfig.findUnique({
+    where: { rekomendasiEventId: eventId },
+    select: { sinkronForbasiAktif: true },
+  });
+  if (!config?.sinkronForbasiAktif) {
+    res.status(403).json({ error: 'Sinkronisasi FORBASI belum diaktifkan super admin untuk event ini.' });
+    return null;
+  }
+  return { eventId };
+}
+
+/* Nomor lomba Kejurda yang berpeserta, untuk dialog pemilihan sebelum sinkron.
+   Jumlah klubnya ikut dikirim supaya panitia tahu apa yang akan masuk sebelum
+   menekan tombolnya, bukan sesudah. */
+router.get('/admin/categories/:categoryId/forbasi-kategori', authenticate, canManageVoting, async (req, res) => {
+  try {
+    const categoryId = toId(req.params.categoryId);
+    if (!(await pastikanBolehSinkron(req, res, categoryId))) return;
+
+    const { categories } = await fetchKejurdaKlub({ eventId: req.query.forbasiEventId || null });
+    res.json({ categories });
+  } catch (error) {
+    console.error('Ambil kategori Kejurda FORBASI error:', error);
+    res.status(502).json({ error: 'Gagal menarik daftar nomor lomba dari FORBASI pusat', detail: error.message });
+  }
+});
+
+/* Tarik klub peserta Kejurda FORBASI pusat menjadi nominee kategori ini.
+ *
+ * Panitia tidak perlu mengetik ulang ratusan nama klub berikut asal sekolah dan
+ * logonya — daftar itu sudah ada di pusat, dan pusat hanya menyerahkan yang
+ * pendaftarannya lunas.
+ *
+ * Tidak pernah menghapus apa pun. Nominee yang hilang dari daftar pusat
+ * dibiarkan berdiri: suaranya sudah terlanjur masuk dan riwayat tidak boleh
+ * bolong — panitia sendiri yang memutuskan menonaktifkannya. Pencocokan memakai
+ * nama klub, sehingga menekan tombolnya dua kali tidak menggandakan siapa pun.
+ */
+router.post('/admin/categories/:categoryId/nominees/sinkron-forbasi', authenticate, canManageVoting, async (req, res) => {
+  try {
+    const categoryId = toId(req.params.categoryId);
+    if (!(await pastikanBolehSinkron(req, res, categoryId))) return;
+
+    /* Event Kejurda di pusat, bukan event voting di sini — dua penomoran yang
+       berbeda, dan menyamakannya akan menarik daftar milik event lain. */
+    const forbasiEventId = req.body?.forbasiEventId || null;
+    /* Nomor lomba yang dipilih panitia di dialog. Kosong berarti semua, sama
+       seperti di pusat — tapi dialognya selalu meminta pilihan lebih dulu. */
+    const categoryIds = Array.isArray(req.body?.categoryIds)
+      ? req.body.categoryIds.map((v) => parseInt(v, 10)).filter((v) => Number.isFinite(v) && v > 0)
+      : [];
+
+    const { data: klub } = await fetchKejurdaKlub({ eventId: forbasiEventId, categoryIds });
+    if (!klub.length) {
+      return res.json({ message: 'Tidak ada klub lunas pada nomor lomba yang dipilih.', ditambah: 0, diperbarui: 0, total: 0 });
+    }
+
+    const kunci = (nama) => String(nama || '').trim().toLowerCase();
+    const terpasang = new Map(
+      (await prisma.votingNominee.findMany({ where: { categoryId } }))
+        .map((n) => [kunci(n.nomineeName), n])
+    );
+
+    let ditambah = 0;
+    let diperbarui = 0;
+    for (const k of klub) {
+      const nama = String(k.club_name || '').trim();
+      if (!nama) continue;
+      const lama = terpasang.get(kunci(nama));
+
+      if (!lama) {
+        await prisma.votingNominee.create({
+          data: {
+            categoryId,
+            nomineeName: nama,
+            nomineeSubtitle: k.school_name || null,
+            nomineePhoto: k.logo_url || null,
+          },
+        });
+        ditambah += 1;
+        continue;
+      }
+
+      /* Foto unggahan panitia tersimpan sebagai jalur lokal (/uploads/…),
+         sedangkan hasil sinkronisasi selalu URL penuh. Hanya yang kedua yang
+         boleh disegarkan, supaya penyuntingan manual tidak terhapus diam-diam. */
+      const fotoHasilSinkron = !lama.nomineePhoto || lama.nomineePhoto.startsWith('http');
+      const perubahan = {};
+      if ((lama.nomineeSubtitle || null) !== (k.school_name || null)) {
+        perubahan.nomineeSubtitle = k.school_name || null;
+      }
+      if (fotoHasilSinkron && (lama.nomineePhoto || null) !== (k.logo_url || null)) {
+        perubahan.nomineePhoto = k.logo_url || null;
+      }
+      if (Object.keys(perubahan).length) {
+        await prisma.votingNominee.update({ where: { id: lama.id }, data: perubahan });
+        diperbarui += 1;
+      }
+    }
+
+    res.json({
+      message: `Sinkronisasi selesai: ${ditambah} nominee baru, ${diperbarui} diperbarui, dari ${klub.length} klub lunas.`,
+      ditambah,
+      diperbarui,
+      total: klub.length,
+    });
+  } catch (error) {
+    console.error('Sinkron nominee FORBASI error:', error);
+    res.status(502).json({ error: 'Gagal menarik data klub dari FORBASI pusat', detail: error.message });
   }
 });
 

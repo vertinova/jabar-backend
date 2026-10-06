@@ -175,6 +175,56 @@ async function fetchForbasiMembersKta() {
 }
 
 /**
+ * Fetch klub peserta Kejurda FORBASI pusat — nama klub, asal sekolah, logo.
+ *
+ * Dipakai halaman publik situs Jabar. Penyaringannya dikerjakan di pusat
+ * (pendaftaran mandiri yang sudah lunas dan tidak ditolak) dan barisnya sudah
+ * digabung per klub di sana, jadi di sini tidak ada lagi yang perlu dibereskan.
+ *
+ * Balasannya juga memuat `categories`: seluruh nomor lomba yang berpeserta
+ * beserta jumlah klubnya, apa pun penyaring yang sedang dipakai. Itu yang
+ * mengisi dialog pemilihan sebelum sinkronisasi dijalankan.
+ *
+ * @param {Object} [options] - { eventId, categoryIds } keduanya opsional;
+ *   kosong berarti seluruh event dan seluruh nomor lomba.
+ */
+async function fetchKejurdaKlub(options = {}) {
+  if (!isForbasiConfigured()) return { total: 0, data: [], categories: [] };
+
+  const params = new URLSearchParams();
+  if (options.eventId) params.append('event_id', options.eventId);
+  if (Array.isArray(options.categoryIds) && options.categoryIds.length) {
+    params.append('category_ids', options.categoryIds.join(','));
+  }
+  const qs = params.toString();
+  const url = `${FORBASI_API_URL}/kejurda-klub${qs ? `?${qs}` : ''}`;
+
+  const response = await fetch(url, { headers: { 'X-API-Key': FORBASI_API_KEY } });
+  if (!response.ok) {
+    const retryAfter = response.headers.get('retry-after');
+    throw new Error(`FORBASI kejurda-klub API error: ${response.status} ${response.statusText}${retryAfter ? ` (retry after ${retryAfter}s)` : ''}`);
+  }
+
+  const result = await response.json().catch(() => null);
+  if (!result || !result.success || !Array.isArray(result.data)) {
+    throw new Error(result?.message || result?.error || 'FORBASI kejurda-klub API returned invalid response');
+  }
+
+  /* Logo tetap dilewatkan fixForbasiFileUrl. Endpoint barunya sudah menerbitkan
+     URL yang benar dan pembetul ini membiarkan URL benar apa adanya — gunanya
+     sebagai jaring kalau suatu saat jalurnya berubah lagi. */
+  return {
+    total: result.total ?? result.data.length,
+    categories: Array.isArray(result.categories) ? result.categories : [],
+    data: result.data.map((k) => ({
+      club_name: k.club_name,
+      school_name: k.school_name || null,
+      logo_url: fixForbasiFileUrl(k.logo_url),
+    })),
+  };
+}
+
+/**
  * Fetch single account detail from FORBASI API (v3.0)
  */
 async function fetchForbasiAccount(identifier) {
@@ -328,6 +378,7 @@ module.exports = {
   verifyForbasiLogin,
   fetchForbasiAccounts,
   fetchForbasiMembersKta,
+  fetchKejurdaKlub,
   fetchForbasiAccount,
   fetchForbasiKta,
   fixForbasiFileUrl,
