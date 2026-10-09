@@ -293,9 +293,18 @@ router.get('/events', async (req, res) => {
     const limitNum = Math.min(50, Math.max(1, Number.parseInt(limit, 10) || 12));
     const skip = (pageNum - 1) * limitNum;
 
+    // Voting yang periodenya sudah lewat tidak lagi ditampilkan di daftar publik:
+    // kartunya tidak bisa diapa-apakan lagi dan hanya menumpuk halaman. Detail
+    // event tetap bisa dibuka lewat tautan langsung (GET /events/:eventId).
     const where = {
       NOT: { status: 'DITOLAK' },
-      votingConfig: { is: { enabled: true, approvalStatus: 'APPROVED' } },
+      votingConfig: {
+        is: {
+          enabled: true,
+          approvalStatus: 'APPROVED',
+          OR: [{ endDate: null }, { endDate: { gte: new Date() } }],
+        },
+      },
     };
 
     if (search) {
