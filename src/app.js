@@ -1,3 +1,5 @@
+// Font kartu berbagi harus terpasang sebelum sharp menggambar teks pertama.
+require('./lib/fontKartu');
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -19,6 +21,8 @@ const simpaskorRoutes = require('./routes/simpaskor.routes');
 const apiKeyRoutes = require('./routes/apiKey.routes');
 const externalRoutes = require('./routes/external.routes');
 const votingRoutes = require('./routes/voting.routes');
+const ttsRoutes = require('./routes/tts.routes');
+const shareRoutes = require('./routes/share.routes');
 const monitoringRoutes = require('./routes/monitoring.routes');
 const paymentRoutes = require('./routes/payment.routes');
 const rankingRoutes = require('./routes/ranking.routes');
@@ -55,6 +59,12 @@ app.use('/api/simpaskor', simpaskorRoutes);
 app.use('/api/api-keys', apiKeyRoutes);
 app.use('/api/external', externalRoutes);
 app.use('/api/voting', votingRoutes);
+// Narasi popup live arena voting (Edge Read Aloud, id-ID).
+app.use('/api/tts', ttsRoutes);
+// Halaman berbagi ber-Open Graph untuk arena voting (perayap WA/FB tidak
+// menjalankan JavaScript). Di bawah /api supaya ikut blok nginx /api/ yang
+// sudah ada — deploy lewat webhook tidak mengubah konfigurasi nginx.
+app.use('/api/s', shareRoutes);
 app.use('/api/monitoring', monitoringRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/ranking', rankingRoutes);

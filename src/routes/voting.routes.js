@@ -21,6 +21,9 @@ const {
   calculateVotingAdminFee,
   calculateVotingRevenueSplit,
   finalizeVotingPurchaseSuccess,
+  sanitizeVotingGift,
+  sanitizeVotingSfx,
+  tierSfxVoting,
   VOTING_ADMIN_FEE_PER_VOTE,
   VOTING_MAX_ADMIN_FEE,
   tarifAdminVoting,
@@ -38,6 +41,7 @@ const {
 // angka yang sama persis — bukan dua hitungan mirip yang selisih pembulatan.
 const { computeSharePools, carveDeveloperShare } = require('../lib/revenueShare');
 const externalVotingCtrl = require('../controllers/externalVoting.controller');
+const { jadwalEfektifKategori, alasanJadwalKategoriDitolak } = require('../lib/jadwalKategoriVoting');
 
 const optionalAuthenticate = (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -237,20 +241,18 @@ const validatePaidVotingTarget = async (eventId, categoryId, nomineeId) => {
     throw new Error('Kategori voting tidak tersedia');
   }
 
-  const now = new Date();
-  if (category.config.startDate && now < category.config.startDate) {
-    throw new Error('Voting belum dimulai');
-  }
-  if (category.config.endDate && now > category.config.endDate) {
-    throw new Error('Voting sudah ditutup');
-  }
+  const alasanJadwal = alasanJadwalKategoriDitolak(category, category.config);
+  if (alasanJadwal) throw new Error(alasanJadwal);
 
   const nominee = await prisma.votingNominee.findFirst({
     where: { id: parsedNomineeId, categoryId: parsedCategoryId, isActive: true },
   });
   if (!nominee) throw new Error('Nominee tidak ditemukan dalam kategori ini');
 
-  return { category, nominee };
+  // Batas QRIS ikut jadwal kategori, bukan hanya arena: kategori SD yang
+  // tutup lebih dulu tidak boleh menyisakan QRIS yang masih bisa dibayar.
+  const { endDate: tutupEfektif } = jadwalEfektifKategori(category, category.config);
+  return { category, nominee, tutupEfektif };
 };
 
 const refreshVotingPurchasePaymentStatus = async (purchaseId) => {
@@ -452,6 +454,228 @@ router.get('/events/:eventId/top-voter', async (req, res) => {
   }
 });
 
+/* Papan pendukung: 10 besar pendukung se-arena, diakumulasi PER NAMA, plus
+ * riwayat vote masuk beserta pesannya. Disalin dari Simpaskor
+ * (GET /events/:eventId/papan-pendukung).
+ *
+ * Hanya vote BERBAYAR: nama vote gratis diisi bebas tanpa biaya, dan papan
+ * yang bisa dinaiki gratis tidak mengukur apa-apa.
+ *
+ * Setelan panitia ditegakkan DI SINI, bukan hanya di tampilan: endpoint ini
+ * publik, jadi panel yang dimatikan juga berarti datanya tidak dikirim.
+ *
+ * Nama disatukan longgar (spasi dirapikan, huruf besar-kecil diabaikan) supaya
+ * "Budi", "budi", dan "Budi " terhitung satu orang. */
+const PAPAN_TTL_MS = 30_000;
+const papanSinggahan = new Map();
+const rapikanNama = (nama) => String(nama || '').replace(/\s+/g, ' ').trim();
+
+router.get('/events/:eventId/papan-pendukung', async (req, res) => {
+  const kosong = { papan: [], riwayat: [], total: { pendukung: 0, votes: 0 }, tampilkan: { papan: false, riwayat: false } };
+  try {
+    const eventId = toId(req.params.eventId);
+    if (!eventId) return res.json(kosong);
+
+    const setelan = await prisma.eventVotingConfig.findFirst({
+      where: { rekomendasiEventId: eventId, enabled: true, approvalStatus: 'APPROVED' },
+      select: { tampilkanPapanPendukung: true, tampilkanRiwayatPendukung: true },
+    });
+    if (!setelan || (!setelan.tampilkanPapanPendukung && !setelan.tampilkanRiwayatPendukung)) return res.json(kosong);
+
+    const batasPapan = Math.min(50, Math.max(3, Number(req.query.batasPapan) || 10));
+    const batasRiwayat = Math.min(100, Math.max(5, Number(req.query.batasRiwayat) || 40));
+    // Setelan ikut kunci: mematikan panel harus berlaku tanpa menunggu TTL.
+    const kunci = `${eventId}:${batasPapan}:${batasRiwayat}:${setelan.tampilkanPapanPendukung}:${setelan.tampilkanRiwayatPendukung}`;
+    const tersimpan = papanSinggahan.get(kunci);
+    if (tersimpan && tersimpan.kedaluwarsa > Date.now()) return res.json(tersimpan.isi);
+
+    const tampilkan = { papan: setelan.tampilkanPapanPendukung, riwayat: setelan.tampilkanRiwayatPendukung };
+    const whereLunas = { rekomendasiEventId: eventId, status: 'PAID' };
+
+    let papan = [];
+    const total = { pendukung: 0, votes: 0 };
+    if (tampilkan.papan) {
+      const kelompok = await prisma.votingPurchase.groupBy({
+        by: ['buyerName'],
+        where: whereLunas,
+        _sum: { voteCount: true },
+        _count: true,
+        _max: { paidAt: true },
+      });
+      const perNama = new Map();
+      for (const k of kelompok) {
+        const nama = rapikanNama(k.buyerName);
+        if (!nama) continue;
+        const kunciNama = nama.toLowerCase();
+        const ada = perNama.get(kunciNama) || { nama, votes: 0, transaksi: 0, terakhir: 0 };
+        ada.votes += k._sum.voteCount || 0;
+        ada.transaksi += k._count || 0;
+        // Ejaan dari transaksi terbaru yang dipakai sebagai nama tampil.
+        const t = k._max.paidAt ? k._max.paidAt.getTime() : 0;
+        if (t >= ada.terakhir) { ada.nama = nama; ada.terakhir = t; }
+        perNama.set(kunciNama, ada);
+      }
+      const semua = [...perNama.values()];
+      total.pendukung = semua.length;
+      total.votes = semua.reduce((n, b) => n + b.votes, 0);
+      papan = semua
+        .sort((a, b) => b.votes - a.votes || a.nama.localeCompare(b.nama, 'id'))
+        .slice(0, batasPapan)
+        .map((b, i) => ({ peringkat: i + 1, nama: b.nama, votes: b.votes, transaksi: b.transaksi }));
+    }
+
+    let riwayat = [];
+    if (tampilkan.riwayat) {
+      const baris = await prisma.votingPurchase.findMany({
+        where: whereLunas,
+        orderBy: [{ paidAt: 'desc' }, { createdAt: 'desc' }],
+        take: batasRiwayat,
+        select: { id: true, buyerName: true, supportMessage: true, voteCount: true, paidAt: true, createdAt: true, nomineeId: true },
+      });
+      const idNominee = [...new Set(baris.map((b) => b.nomineeId).filter(Boolean))];
+      const namaNominee = new Map((idNominee.length
+        ? await prisma.votingNominee.findMany({ where: { id: { in: idNominee } }, select: { id: true, nomineeName: true } })
+        : []).map((n) => [n.id, n.nomineeName]));
+      riwayat = baris.map((b) => ({
+        id: `VP-${b.id}`,
+        nama: rapikanNama(b.buyerName) || 'Pendukung',
+        pesan: b.supportMessage || null,
+        votes: b.voteCount,
+        nomineeName: namaNominee.get(b.nomineeId) || null,
+        ts: (b.paidAt || b.createdAt).getTime(),
+      }));
+    }
+
+    const isi = { papan, riwayat, total, tampilkan };
+    papanSinggahan.set(kunci, { kedaluwarsa: Date.now() + PAPAN_TTL_MS, isi });
+    if (papanSinggahan.size > 500) {
+      for (const [k, v] of papanSinggahan) if (v.kedaluwarsa <= Date.now()) papanSinggahan.delete(k);
+    }
+    res.json(isi);
+  } catch (error) {
+    // Panel pelengkap — kegagalannya tidak boleh mengganggu arena.
+    console.error('Gagal memuat papan pendukung:', error.message);
+    res.json(kosong);
+  }
+});
+
+/* Feed popup booster (live alert), mengikuti Simpaskor: tiap pengunjung arena
+ * menanyakannya ~3 detik sekali dengan `since=<serverTs terakhir>`.
+ *
+ * Bedanya dengan Simpaskor: sumbernya tabel pembelian, bukan ring buffer di
+ * memori. Pembayaran di sini bisa dilunasi tiga jalur (webhook, cek status
+ * dari peramban pembeli, skrip rekonsiliasi), dan hanya tabelnya yang
+ * dilihat ketiganya. Agar polling itu tidak memukul DB per pengunjung, hasil
+ * 60 detik terakhir per event di-cache 2 detik dan disaring `since` di Node.
+ *
+ * `paidAt` ditulis sesaat SEBELUM transaksinya ter-commit, jadi pembelian bisa
+ * baru terlihat dengan `paidAt` sedikit lebih tua dari `since` milik peminta.
+ * Karena itu jendelanya dimundurkan LIVE_PURCHASE_GRACE_MS; pengulangan yang
+ * ikut terbawa disaring frontend lewat id. */
+const LIVE_PURCHASE_WINDOW_MS = 60_000;
+const LIVE_PURCHASE_GRACE_MS = 15_000;
+const LIVE_PURCHASE_CACHE_MS = 2_000;
+const livePurchaseCache = new Map();
+
+const loadLivePurchases = async (eventId) => {
+  const cached = livePurchaseCache.get(eventId);
+  if (cached && cached.expires > Date.now()) return cached.entries;
+
+  const purchases = await prisma.votingPurchase.findMany({
+    where: {
+      rekomendasiEventId: eventId,
+      status: 'PAID',
+      paidAt: { gte: new Date(Date.now() - LIVE_PURCHASE_WINDOW_MS) },
+      event: { votingConfig: { is: { enabled: true, approvalStatus: 'APPROVED' } } },
+    },
+    orderBy: { paidAt: 'asc' },
+    take: 60,
+    select: {
+      id: true, buyerName: true, supportMessage: true, voteCount: true,
+      giftType: true, sfxKey: true, nomineeId: true, paidAt: true,
+    },
+  });
+  const nomineeIds = [...new Set(purchases.map((p) => p.nomineeId).filter(Boolean))];
+  const nominees = nomineeIds.length
+    ? await prisma.votingNominee.findMany({ where: { id: { in: nomineeIds } }, select: { id: true, nomineeName: true } })
+    : [];
+  const nomineeName = new Map(nominees.map((n) => [n.id, n.nomineeName]));
+
+  const entries = purchases.map((p) => ({
+    id: `VP-${p.id}`,
+    buyerName: p.buyerName,
+    buyerMessage: p.supportMessage,
+    voteCount: p.voteCount,
+    giftType: p.giftType,
+    sfxKey: p.sfxKey,
+    nomineeId: p.nomineeId,
+    nomineeName: nomineeName.get(p.nomineeId) || null,
+    ts: p.paidAt.getTime(),
+  }));
+
+  livePurchaseCache.set(eventId, { expires: Date.now() + LIVE_PURCHASE_CACHE_MS, entries });
+  if (livePurchaseCache.size > 200) {
+    const now = Date.now();
+    for (const [key, value] of livePurchaseCache) if (value.expires <= now) livePurchaseCache.delete(key);
+  }
+  return entries;
+};
+
+router.get('/events/:eventId/live-purchases', async (req, res) => {
+  const serverTs = Date.now();
+  try {
+    const eventId = toId(req.params.eventId);
+    if (!eventId) return res.status(400).json({ error: 'ID event tidak valid' });
+
+    const since = Number(req.query.since) || 0;
+    // Tanpa `since` (polling pertama) tetap dikirim isi jendela grace, supaya
+    // frontend bisa menandainya "sudah terlihat" tanpa memutarnya.
+    const from = (since > 0 ? since : serverTs) - LIVE_PURCHASE_GRACE_MS;
+    const entries = (await loadLivePurchases(eventId)).filter((entry) => entry.ts > from);
+    res.json({ entries, serverTs });
+  } catch (error) {
+    // Popup hanyalah hiasan; kegagalannya tidak boleh tampil sebagai error.
+    console.error('Gagal memuat live purchase voting:', error.message);
+    res.json({ entries: [], serverTs });
+  }
+});
+
+/* Jumlah penonton arena, mengikuti Simpaskor (/visitors/penonton): tiap tab
+ * yang membuka arena mengirim denyut berkala dengan id sesi acak, dan
+ * balasannya jumlah sesi yang masih berdenyut. Di memori saja — cukup untuk
+ * satu proses; di pm2 cluster tiap worker menghitung tab yang kebetulan
+ * dilayaninya, jadi angkanya bisa lebih kecil dari sebenarnya. */
+const PENONTON_TTL_MS = 45_000;
+const PENONTON_MAKS_SESI = 20_000;
+const penontonArena = new Map(); // eventId -> Map(sessionId -> lastSeen)
+
+const hitungPenonton = (eventId) => {
+  const sesi = penontonArena.get(eventId);
+  if (!sesi) return 0;
+  const batas = Date.now() - PENONTON_TTL_MS;
+  for (const [id, lastSeen] of sesi) if (lastSeen < batas) sesi.delete(id);
+  if (!sesi.size) penontonArena.delete(eventId);
+  return sesi.size;
+};
+
+router.post('/events/:eventId/penonton', (req, res) => {
+  const eventId = toId(req.params.eventId);
+  const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.slice(0, 64) : '';
+  if (!eventId || !sessionId) return res.status(400).json({ error: 'Event dan sesi wajib diisi' });
+
+  let sesi = penontonArena.get(eventId);
+  if (!sesi) {
+    // Kunci event datang dari pengunjung; batasi supaya peta tidak membengkak.
+    if (penontonArena.size > 2_000) penontonArena.clear();
+    sesi = new Map();
+    penontonArena.set(eventId, sesi);
+  }
+  if (req.body?.pergi) sesi.delete(sessionId);
+  else if (sesi.size < PENONTON_MAKS_SESI || sesi.has(sessionId)) sesi.set(sessionId, Date.now());
+
+  res.json({ count: hitungPenonton(eventId) });
+});
+
 router.post('/vote', optionalAuthenticate, async (req, res) => {
   try {
     const categoryId = toId(req.body.categoryId);
@@ -477,19 +701,25 @@ router.post('/vote', optionalAuthenticate, async (req, res) => {
       return res.status(404).json({ error: 'Kategori voting tidak tersedia' });
     }
 
-    const now = new Date();
-    if (category.config.startDate && now < category.config.startDate) {
-      return res.status(400).json({ error: 'Voting belum dimulai' });
-    }
-    if (category.config.endDate && now > category.config.endDate) {
-      return res.status(400).json({ error: 'Voting sudah ditutup' });
-    }
+    const alasanJadwal = alasanJadwalKategoriDitolak(category, category.config);
+    if (alasanJadwal) return res.status(400).json({ error: alasanJadwal });
     if (category.config.isPaid) {
       return res.status(400).json({ error: 'Voting berbayar belum diaktifkan di aplikasi ini' });
     }
 
     const nominee = await prisma.votingNominee.findFirst({ where: { id: nomineeId, categoryId, isActive: true } });
     if (!nominee) return res.status(404).json({ error: 'Nominee tidak ditemukan' });
+
+    /* Batas vote per orang. NOL = TANPA BATAS, bukan "tidak boleh memilih".
+       Identitasnya email (dari akun atau isian); pemilih tanpa identitas tidak
+       bisa dihitung, sama seperti di Simpaskor. */
+    const batasVote = category.maxVotesPerVoter > 0 ? category.maxVotesPerVoter : null;
+    if (batasVote !== null && voterEmail) {
+      const sudahVote = await prisma.votingVote.count({ where: { categoryId, voterEmail } });
+      if (sudahVote >= batasVote) {
+        return res.status(400).json({ error: `Anda sudah mencapai batas maksimal ${batasVote} vote untuk kategori ini` });
+      }
+    }
 
     const vote = await prisma.$transaction(async (tx) => {
       const created = await tx.votingVote.create({
@@ -522,7 +752,7 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
   try {
     const eventId = toId(req.body.eventId);
     const voteCount = Number(req.body.voteCount);
-    const { categoryId, nomineeId, buyerName, buyerEmail, buyerPhone, supportMessage } = req.body;
+    const { categoryId, nomineeId, buyerName, buyerEmail, buyerPhone, supportMessage, giftType, sfxKey } = req.body;
     const normalizedBuyerName = String(buyerName || '').trim();
     const normalizedBuyerPhone = String(buyerPhone || '').trim();
     const normalizedSupportMessage = String(supportMessage || '').trim().slice(0, 200) || null;
@@ -537,6 +767,18 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
 
     if (!Number.isInteger(voteCount) || voteCount < 1) {
       return res.status(400).json({ error: 'Jumlah vote harus minimal 1' });
+    }
+
+    /* Mulai 5 vote memilih efek suara wajib, seperti di Simpaskor. Form sudah
+       menahannya, tapi aturan yang hanya hidup di peramban bukan aturan: tab
+       lama yang bundle-nya belum diperbarui masih bisa membeli tanpa suara.
+       Ditolak sebelum pesanan dan token Snap dibuat. */
+    const normalizedSfxKey = sanitizeVotingSfx(sfxKey, voteCount);
+    const tierSfx = tierSfxVoting(voteCount);
+    if (tierSfx !== null && !normalizedSfxKey) {
+      return res.status(400).json({
+        error: `Pembelian ${voteCount} vote wajib memilih satu efek suara tier ${tierSfx}. Muat ulang halaman bila pilihan suaranya tidak tampil.`,
+      });
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -611,6 +853,8 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
              null bukan nilai yang diharapkan. */
           buyerPhone: normalizedBuyerPhone || null,
           supportMessage: normalizedSupportMessage,
+          giftType: sanitizeVotingGift(giftType, voteCount),
+          sfxKey: normalizedSfxKey,
           categoryId: votingTarget.category.id,
           nomineeId: votingTarget.nominee.id,
           voteCount,
@@ -641,7 +885,7 @@ router.post('/purchase', optionalAuthenticate, async (req, res) => {
       // Keep the checkout short-lived (so abandoned QRIS expires fast) but never
       // let it outlive the voting close time (a QRIS must not be payable after
       // voting ends).
-      const votingEndDate = config.endDate ? new Date(config.endDate) : null;
+      const votingEndDate = votingTarget.tutupEfektif ? new Date(votingTarget.tutupEfektif) : null;
       const secondsUntilClose = votingEndDate
         ? Math.floor((votingEndDate.getTime() - Date.now()) / 1000)
         : null;
@@ -1327,6 +1571,11 @@ router.put('/admin/event/:eventId/config', authenticate, canManageVoting, async 
       pricePerVote: Number(req.body.pricePerVote) || 0,
       startDate: req.body.startDate ? new Date(req.body.startDate) : null,
       endDate: req.body.endDate ? new Date(req.body.endDate) : null,
+      // Setelan tampilan arena — hanya disentuh bila dikirim, supaya panel
+      // versi lama yang belum mengenalnya tidak mematikannya diam-diam.
+      ...(req.body.tampilkanPapanPendukung !== undefined && { tampilkanPapanPendukung: !!req.body.tampilkanPapanPendukung }),
+      ...(req.body.tampilkanRiwayatPendukung !== undefined && { tampilkanRiwayatPendukung: !!req.body.tampilkanRiwayatPendukung }),
+      ...(req.body.tampilanVote !== undefined && { tampilanVote: req.body.tampilanVote === 'PERSEN' ? 'PERSEN' : 'JUMLAH' }),
     };
 
     const config = await prisma.eventVotingConfig.upsert({
@@ -1483,12 +1732,47 @@ router.patch('/admin/event/:eventId/developer-share', authenticate, canManageVot
   }
 });
 
+/* Setelan kategori yang dikirim panel penyelenggara: jadwal sendiri dan batas
+ * vote gratis per orang. Hanya field yang dikirim yang dibaca, supaya sakelar
+ * aktif/nonaktif tidak menghapus jadwal. Mengembalikan { data } atau { error }. */
+const bacaSetelanKategori = (body) => {
+  const data = {};
+  if (body.maxVotesPerVoter !== undefined) {
+    const batas = Number(body.maxVotesPerVoter);
+    if (!Number.isInteger(batas) || batas < 0) return { error: 'Batas vote per orang harus bilangan bulat 0 atau lebih (0 = tanpa batas)' };
+    data.maxVotesPerVoter = batas;
+  }
+  if (body.ikutiJadwalArena !== undefined) {
+    const ikut = body.ikutiJadwalArena === true || body.ikutiJadwalArena === 'true';
+    data.ikutiJadwalArena = ikut;
+    if (!ikut) {
+      const baca = (nilai) => (nilai ? new Date(nilai) : null);
+      const mulai = baca(body.startDate);
+      const selesai = baca(body.endDate);
+      if (mulai && Number.isNaN(mulai.getTime())) return { error: 'Tanggal mulai kategori tidak valid' };
+      if (selesai && Number.isNaN(selesai.getTime())) return { error: 'Tanggal selesai kategori tidak valid' };
+      if (!mulai && !selesai) return { error: 'Isi tanggal mulai atau selesai kategori, atau pilih ikuti jadwal arena' };
+      if (mulai && selesai && selesai <= mulai) return { error: 'Tanggal selesai kategori harus setelah tanggal mulai' };
+      data.startDate = mulai;
+      data.endDate = selesai;
+    } else {
+      // Kembali mengikuti arena: jadwal lama dibuang supaya tidak menyala lagi
+      // diam-diam saat sakelar dimatikan kembali.
+      data.startDate = null;
+      data.endDate = null;
+    }
+  }
+  return { data };
+};
+
 router.post('/admin/event/:eventId/categories', authenticate, canManageVoting, async (req, res) => {
   try {
     const eventId = toId(req.params.eventId);
     if (!eventId) return res.status(400).json({ error: 'ID event tidak valid' });
     if (!(await verifyEventOwnership(req, eventId))) return res.status(403).json({ error: 'Tidak memiliki akses ke event ini' });
     if (!req.body.title?.trim()) return res.status(400).json({ error: 'Judul kategori wajib diisi' });
+    const setelan = bacaSetelanKategori(req.body);
+    if (setelan.error) return res.status(400).json({ error: setelan.error });
 
     const config = await prisma.eventVotingConfig.upsert({
       where: { rekomendasiEventId: eventId },
@@ -1504,6 +1788,7 @@ router.post('/admin/event/:eventId/categories', authenticate, canManageVoting, a
         mode: req.body.mode === 'PERSONAL' ? 'PERSONAL' : 'TEAM',
         position: req.body.position || null,
         order: Number.parseInt(req.body.order, 10) || 0,
+        ...setelan.data,
       },
       include: { _count: { select: { nominees: true, votes: true } } },
     });
@@ -1520,11 +1805,17 @@ router.put('/admin/categories/:categoryId', authenticate, canManageVoting, async
     const eventId = await getEventIdForCategory(categoryId);
     if (!eventId) return res.status(404).json({ error: 'Kategori tidak ditemukan' });
     if (!(await verifyEventOwnership(req, eventId))) return res.status(403).json({ error: 'Tidak memiliki akses ke kategori ini' });
+    if (req.body.title !== undefined && !String(req.body.title).trim()) {
+      return res.status(400).json({ error: 'Judul kategori wajib diisi' });
+    }
+    const setelan = bacaSetelanKategori(req.body);
+    if (setelan.error) return res.status(400).json({ error: setelan.error });
 
     const category = await prisma.votingCategory.update({
       where: { id: categoryId },
       data: {
-        ...(req.body.title !== undefined && { title: req.body.title }),
+        ...setelan.data,
+        ...(req.body.title !== undefined && { title: String(req.body.title).trim() }),
         ...(req.body.description !== undefined && { description: req.body.description || null }),
         ...(req.body.mode !== undefined && { mode: req.body.mode === 'PERSONAL' ? 'PERSONAL' : 'TEAM' }),
         ...(req.body.position !== undefined && { position: req.body.position || null }),

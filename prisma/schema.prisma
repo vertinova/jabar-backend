@@ -196,6 +196,12 @@ model EventVotingConfig {
   // event: akses ke data pusat bukan sesuatu yang layak menyala hanya karena
   // sebuah event voting dibuka.
   sinkronForbasiAktif   Boolean              @default(false) @map("sinkron_forbasi_aktif")
+  // Panel kiri arena publik; panitia mematikannya bila nama pendukung tidak
+  // ingin dipertontonkan. Ditegakkan juga di endpoint papan-pendukung.
+  tampilkanPapanPendukung   Boolean          @default(true) @map("tampilkan_papan_pendukung")
+  tampilkanRiwayatPendukung Boolean          @default(true) @map("tampilkan_riwayat_pendukung")
+  // "JUMLAH" (angka vote, bawaan) atau "PERSEN" (persentase vote kategori).
+  tampilanVote          String               @default("JUMLAH") @map("tampilan_vote") @db.VarChar(10)
   // Tarif biaya admin khusus event ini. NULL berarti ikut tarif bawaan —
   // dibedakan dari angka yang kebetulan disetel sama, supaya mengubah tarif
   // bawaan tetap menyentuh event yang tidak pernah diatur sendiri.
@@ -222,8 +228,15 @@ model VotingCategory {
   description      String?           @db.Text
   mode             VotingMode        @default(TEAM)
   position         String?
-  maxVotesPerVoter Int               @default(1) @map("max_votes_per_voter")
+  /// Batas vote GRATIS per orang di kategori ini. NOL = tanpa batas.
+  maxVotesPerVoter Int               @default(0) @map("max_votes_per_voter")
   isActive         Boolean           @default(true) @map("is_active")
+  /// true = buka & tutup bersama jadwal arena. false = memakai startDate/
+  /// endDate di bawah, selalu dijepit DI DALAM jadwal arena
+  /// (lib/jadwalKategoriVoting.js).
+  ikutiJadwalArena Boolean           @default(true) @map("ikuti_jadwal_arena")
+  startDate        DateTime?         @map("start_date")
+  endDate          DateTime?         @map("end_date")
   order            Int               @default(0)
   createdAt        DateTime          @default(now()) @map("created_at")
   updatedAt        DateTime          @updatedAt @map("updated_at")
@@ -280,6 +293,10 @@ model VotingPurchase {
   buyerEmail            String               @map("buyer_email")
   buyerPhone            String?              @map("buyer_phone")
   supportMessage        String?              @map("support_message") @db.VarChar(200)
+  // Kartu gift booster (flame/bear/rocket/lion). NULL = jumlah vote custom.
+  giftType              String?              @map("gift_type") @db.VarChar(20)
+  // Efek suara popup pilihan pembeli (slug public/sfx/<key>.mp3). NULL = bawaan gift.
+  sfxKey                String?              @map("sfx_key") @db.VarChar(40)
   categoryId            Int?                 @map("category_id")
   nomineeId             Int?                 @map("nominee_id")
   voteCount             Int                  @default(1) @map("vote_count")
@@ -304,6 +321,7 @@ model VotingPurchase {
   votes VotingVote[]
 
   @@index([rekomendasiEventId])
+  @@index([rekomendasiEventId, status, paidAt])
   @@index([categoryId])
   @@index([nomineeId])
   @@index([buyerEmail])
