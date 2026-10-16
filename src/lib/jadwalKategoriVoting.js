@@ -4,23 +4,24 @@
  *
  * Bawaannya kategori mengikuti jadwal arena (EventVotingConfig). Panitia bisa
  * memberi kategori jadwal sendiri — mis. kategori SD ditutup lebih dulu, SMP
- * menyusul — tetapi jadwal itu selalu DI DALAM jadwal arena: dibuka paling
- * cepat saat arena dibuka, ditutup paling lambat saat arena ditutup.
+ * menyusul, atau satu kategori diperpanjang melewati arena. Jadwal sendiri
+ * BERLAKU APA ADANYA; sisi yang dikosongkan mengikuti arena. Dulu jadwal itu
+ * dijepit di dalam arena, sehingga kategori yang diperpanjang tetap tutup
+ * bersama arena dan arena tidak cocok dengan jadwal yang disimpan panitia.
  *
  * Kembarannya di frontend: src/lib/jadwalKategoriVoting.js — aturannya harus sama.
  */
 
-const yangLebihLambat = (a, b) => (!a ? b : !b ? a : a > b ? a : b);
-const yangLebihAwal = (a, b) => (!a ? b : !b ? a : a < b ? a : b);
+const milikSendiri = (kategori) => Boolean(kategori && kategori.ikutiJadwalArena === false);
 
 /** Rentang yang benar-benar berlaku bagi kategori ini. */
 const jadwalEfektifKategori = (kategori, arena) => {
-  if (!kategori || kategori.ikutiJadwalArena !== false) {
+  if (!milikSendiri(kategori)) {
     return { startDate: arena?.startDate || null, endDate: arena?.endDate || null };
   }
   return {
-    startDate: yangLebihLambat(arena?.startDate || null, kategori.startDate || null),
-    endDate: yangLebihAwal(arena?.endDate || null, kategori.endDate || null),
+    startDate: kategori.startDate || arena?.startDate || null,
+    endDate: kategori.endDate || arena?.endDate || null,
   };
 };
 
@@ -29,18 +30,39 @@ const jadwalEfektifKategori = (kategori, arena) => {
    pemilih tahu arenanya masih buka untuk kategori lain. */
 const alasanJadwalKategoriDitolak = (kategori, arena, sekarang = new Date()) => {
   const { startDate, endDate } = jadwalEfektifKategori(kategori, arena);
-  const milikKategori = kategori?.ikutiJadwalArena === false;
-  if (startDate && sekarang < startDate) {
-    return milikKategori && startDate !== arena?.startDate
+  const sendiri = milikSendiri(kategori);
+  if (startDate && sekarang < new Date(startDate)) {
+    return sendiri && kategori.startDate
       ? `Voting kategori ${kategori.title} belum dimulai`
       : 'Voting belum dimulai';
   }
-  if (endDate && sekarang > endDate) {
-    return milikKategori && endDate !== arena?.endDate
+  if (endDate && sekarang > new Date(endDate)) {
+    return sendiri && kategori.endDate
       ? `Voting kategori ${kategori.title} sudah ditutup`
       : 'Voting sudah ditutup';
   }
   return null;
 };
 
-module.exports = { jadwalEfektifKategori, alasanJadwalKategoriDitolak };
+/* Periode voting keseluruhan sebuah arena: dari pembukaan paling awal sampai
+   penutupan paling akhir di antara arena dan kategori aktif berjadwal sendiri.
+   Dipakai untuk status event (buka/segera/selesai) di daftar publik. Batas yang
+   kosong berarti tanpa batas, jadi menang atas tanggal mana pun. */
+const periodeVotingArena = (arena, kategoriList = []) => {
+  const jadwal = [
+    { startDate: arena?.startDate || null, endDate: arena?.endDate || null },
+    ...kategoriList
+      .filter((k) => k && k.isActive !== false && milikSendiri(k))
+      .map((k) => jadwalEfektifKategori(k, arena)),
+  ];
+  const waktu = (nilai) => new Date(nilai).getTime();
+  const startDate = jadwal.some((j) => !j.startDate)
+    ? null
+    : jadwal.reduce((a, j) => (waktu(j.startDate) < waktu(a) ? j.startDate : a), jadwal[0].startDate);
+  const endDate = jadwal.some((j) => !j.endDate)
+    ? null
+    : jadwal.reduce((a, j) => (waktu(j.endDate) > waktu(a) ? j.endDate : a), jadwal[0].endDate);
+  return { startDate, endDate };
+};
+
+module.exports = { jadwalEfektifKategori, alasanJadwalKategoriDitolak, periodeVotingArena };

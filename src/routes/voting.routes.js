@@ -41,7 +41,7 @@ const {
 // angka yang sama persis — bukan dua hitungan mirip yang selisih pembulatan.
 const { computeSharePools, carveDeveloperShare } = require('../lib/revenueShare');
 const externalVotingCtrl = require('../controllers/externalVoting.controller');
-const { jadwalEfektifKategori, alasanJadwalKategoriDitolak } = require('../lib/jadwalKategoriVoting');
+const { jadwalEfektifKategori, alasanJadwalKategoriDitolak, periodeVotingArena } = require('../lib/jadwalKategoriVoting');
 
 const optionalAuthenticate = (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -129,8 +129,10 @@ const toTimestamp = (value) => {
 
 const votingSortKey = (event) => {
   const now = Date.now();
-  const startDate = toTimestamp(event.votingConfig?.startDate);
-  const endDate = toTimestamp(event.votingConfig?.endDate);
+  // Periode keseluruhan: kategori berjadwal sendiri bisa buka lebih lama dari arena.
+  const periode = periodeVotingArena(event.votingConfig, event.votingConfig?.categories || []);
+  const startDate = toTimestamp(periode.startDate);
+  const endDate = toTimestamp(periode.endDate);
   const fallback = toTimestamp(event.tanggalMulai);
 
   if (startDate && startDate > now) {
@@ -298,13 +300,20 @@ router.get('/events', async (req, res) => {
     // Voting yang periodenya sudah lewat tidak lagi ditampilkan di daftar publik:
     // kartunya tidak bisa diapa-apakan lagi dan hanya menumpuk halaman. Detail
     // event tetap bisa dibuka lewat tautan langsung (GET /events/:eventId).
+    // Arena yang sudah tutup tetap tampil selama masih ada kategori berjadwal
+    // sendiri yang belum tutup.
+    const sekarang = new Date();
     const where = {
       NOT: { status: 'DITOLAK' },
       votingConfig: {
         is: {
           enabled: true,
           approvalStatus: 'APPROVED',
-          OR: [{ endDate: null }, { endDate: { gte: new Date() } }],
+          OR: [
+            { endDate: null },
+            { endDate: { gte: sekarang } },
+            { categories: { some: { isActive: true, ikutiJadwalArena: false, endDate: { gte: sekarang } } } },
+          ],
         },
       },
     };
@@ -329,7 +338,16 @@ router.get('/events', async (req, res) => {
       select: {
         id: true,
         tanggalMulai: true,
-        votingConfig: { select: { startDate: true, endDate: true } },
+        votingConfig: {
+          select: {
+            startDate: true,
+            endDate: true,
+            categories: {
+              where: { isActive: true, ikutiJadwalArena: false },
+              select: { isActive: true, ikutiJadwalArena: true, startDate: true, endDate: true },
+            },
+          },
+        },
       },
     });
 
