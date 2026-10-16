@@ -25,6 +25,7 @@
 const prisma = require('../src/lib/prisma');
 const { getTransactionStatus, resolvePaymentStatus } = require('../src/lib/midtrans');
 const { applyPaidVotingPurchaseVotes } = require('../src/lib/votingPayment');
+const { jadwalEfektifKategori } = require('../src/lib/jadwalKategoriVoting');
 
 const APPLY = process.argv.includes('--apply');
 const MIN_AGE_MINUTES = Number(process.env.RECONCILE_MIN_AGE_MINUTES || 5);
@@ -41,9 +42,21 @@ async function main() {
       purchaseCode: true,
       midtransOrderId: true,
       paidAt: true,
-      event: { select: { votingConfig: { select: { endDate: true } } } },
+      categoryId: true,
+      event: { select: { votingConfig: { select: { startDate: true, endDate: true } } } },
     },
   });
+
+  // Batas tutupnya jadwal efektif KATEGORI (bisa lebih awal dari arena), sama
+  // dengan finalizeVotingPurchaseSuccess di webhook. categoryId di pembelian
+  // hanya id polos tanpa relasi, jadi kategorinya diambil sekali di sini.
+  const categoryIds = [...new Set(list.map((p) => p.categoryId).filter(Boolean))];
+  const kategoriById = new Map((categoryIds.length
+    ? await prisma.votingCategory.findMany({
+      where: { id: { in: categoryIds } },
+      select: { id: true, ikutiJadwalArena: true, startDate: true, endDate: true },
+    })
+    : []).map((k) => [k.id, k]));
 
   const stats = { total: list.length, paid: 0, votes: 0, expired: 0, cancelled: 0, late: 0, pending: 0, error: 0 };
   console.log(`[reconcile] ${APPLY ? 'APPLY' : 'DRY-RUN'} — ${list.length} PENDING (umur > ${MIN_AGE_MINUTES} mnt)`);
@@ -52,7 +65,8 @@ async function main() {
     try {
       const tx = await getTransactionStatus(p.midtransOrderId);
       const result = resolvePaymentStatus(tx.transaction_status, tx.fraud_status);
-      const endDate = p.event?.votingConfig?.endDate ? new Date(p.event.votingConfig.endDate) : null;
+      const { endDate: tutup } = jadwalEfektifKategori(kategoriById.get(p.categoryId) || null, p.event?.votingConfig);
+      const endDate = tutup ? new Date(tutup) : null;
       const votingClosed = endDate && new Date() > endDate;
 
       if (result === 'success') {
